@@ -89,6 +89,13 @@ class Config:
     # Max seconds of a background video that will be re-encoded for the loop segment.
     LITE_MAX_BG_VIDEO_SEC: int = _int("LITE_MAX_BG_VIDEO_SEC", 600)
 
+    # ---- Intro / Outro ----
+    # Short clips attached before / after the main video. They are re-encoded once to match the
+    # main video exactly and then joined by stream copy (no re-encode of the long part).
+    MAX_INTRO_OUTRO_SEC: int = _int("MAX_INTRO_OUTRO_SEC", 300)
+    # A video shorter than this is treated as an intro/outro candidate, longer ones as background loop.
+    INTRO_OUTRO_AUTO_SEC: int = _int("INTRO_OUTRO_AUTO_SEC", 90)
+
     # ---- Paths ----
     DOWNLOAD_DIR: str = os.environ.get("DOWNLOAD_DIR", "downloads")
     DB_PATH: str = os.environ.get("DB_PATH", "bot_data.db")

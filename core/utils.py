@@ -105,11 +105,27 @@ async def run_cmd(cmd: list, timeout: Optional[float] = None) -> tuple:
     return proc.returncode, out.decode(errors="ignore"), err.decode(errors="ignore")
 
 
+def _parse_rate(v: Optional[str]) -> float:
+    """'30000/1001' -> 29.97 ; '25/1' -> 25.0 ; '0/0' -> 0."""
+    if not v:
+        return 0.0
+    try:
+        if "/" in v:
+            a, b = v.split("/", 1)
+            a, b = float(a), float(b)
+            return a / b if b else 0.0
+        return float(v)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
 async def ffprobe(path: str) -> Dict[str, Any]:
     """Return {'duration', 'width', 'height', 'audio_codec', 'video_codec', 'bitrate', 'sample_rate'}."""
     info: Dict[str, Any] = {"duration": 0.0, "width": 0, "height": 0, "audio_codec": None,
                             "video_codec": None, "bitrate": 0, "sample_rate": 0, "has_audio": False,
-                            "has_video": False, "title": None, "artist": None}
+                            "has_video": False, "title": None, "artist": None,
+                            "channels": 0, "audio_profile": None, "fps": 0.0, "pix_fmt": None,
+                            "video_profile": None}
     try:
         code, out, _ = await run_cmd([
             "ffprobe", "-v", "quiet", "-print_format", "json",
@@ -129,6 +145,8 @@ async def ffprobe(path: str) -> Dict[str, Any]:
                 info["has_audio"] = True
                 info["audio_codec"] = s.get("codec_name")
                 info["sample_rate"] = int(s.get("sample_rate") or 0)
+                info["channels"] = int(s.get("channels") or 0)
+                info["audio_profile"] = s.get("profile")
                 if not info["duration"] and s.get("duration"):
                     info["duration"] = float(s["duration"])
             elif s.get("codec_type") == "video":
@@ -139,6 +157,9 @@ async def ffprobe(path: str) -> Dict[str, Any]:
                 info["video_codec"] = s.get("codec_name")
                 info["width"] = int(s.get("width") or 0)
                 info["height"] = int(s.get("height") or 0)
+                info["pix_fmt"] = s.get("pix_fmt")
+                info["video_profile"] = s.get("profile")
+                info["fps"] = _parse_rate(s.get("avg_frame_rate")) or _parse_rate(s.get("r_frame_rate"))
     except Exception as e:
         logger.warning("ffprobe failed for %s: %s", path, e)
     return info

@@ -6,19 +6,25 @@ START = (
     f"Welcome to **{Config.BOT_NAME}** — turn **audio + a photo** into a YouTube-ready MP4, "
     "even 10-hour videos in about a minute.\n\n"
     "**How it works**\n"
-    "1️⃣ Send a photo\n"
-    "2️⃣ Send an audio file\n"
-    "3️⃣ Tap **🎬 Convert Now**\n\n"
+    "1️⃣ Send an **intro video** _(optional)_\n"
+    "2️⃣ Send a **photo**\n"
+    "3️⃣ Send an **outro video** _(optional)_\n"
+    "4️⃣ Send an **audio file**\n"
+    "5️⃣ Tap **🎬 Convert Now**\n\n"
+    "→ You get: `intro` + `photo & audio` + `outro` in one MP4.\n\n"
     "⏱ Want a 2 h / 5 h / 10 h video from a short track? Set the length with **⏱ Duration** — "
     "the audio is looped seamlessly."
 )
 
 HELP_MAIN = (
     "📖 **Guide**\n\n"
-    "1️⃣ Send a photo (or 2-20 photos for a slideshow)\n"
-    "2️⃣ Send an audio / voice / music file\n"
-    "3️⃣ Tap **🎬 Convert Now**\n\n"
-    "• Order does not matter.\n"
+    "1️⃣ Send an intro video _(optional)_\n"
+    "2️⃣ Send a photo (or 2-20 photos for a slideshow)\n"
+    "3️⃣ Send an outro video _(optional)_\n"
+    "4️⃣ Send an audio / voice / music file\n"
+    "5️⃣ Tap **🎬 Convert Now**\n\n"
+    "• Order does not matter — the 1st video is the intro, the 2nd the outro. "
+    "Each clip gets buttons to move it to another slot.\n"
     "• Audio with embedded album art? It is used automatically.\n"
     "• Several audio files are merged one after another.\n"
     "• **⏱ Duration** loops the audio to 1 h, 5 h, 10 h…\n"
@@ -59,10 +65,24 @@ HELP_TOPICS = {
         f"Send 2-{Config.MAX_SLIDESHOW_IMAGES} photos (as an album or one by one). Each photo is shown for the "
         "duration set in `Settings → Slideshow` and the set is looped until the audio ends."
     ),
+    "introoutro": (
+        "🎬 **Intro & 🏁 Outro**\n\n"
+        "Send a short video **before** and/or **after** your photo + audio:\n"
+        "`[ intro ] + [ photo + audio ] + [ outro ]`\n\n"
+        "• The **first** video you send becomes the intro, the **second** the outro. "
+        "Under every clip there are buttons: Intro / Outro / Background / Remove.\n"
+        f"• Max clip length: {Config.MAX_INTRO_OUTRO_SEC // 60} min. Clips keep their own sound; silent clips stay silent.\n"
+        "• Clips are fitted into the frame with black bars (nothing is cropped) and matched to the "
+        "main video's resolution / fps / codec **once** — the long main part is never re-encoded, "
+        "so a 10-hour video with intro + outro is still ready in about a minute.\n"
+        "• **⏱ Duration** applies to the main part only; the intro/outro are added on top."
+    ),
     "bgvideo": (
         "🎥 **Video background**\n\n"
-        "Send a short **video** instead of a photo — it is **looped** for the whole length. "
+        "Send a **video** instead of a photo — it is **looped** for the whole length. "
         "Its own sound is removed and your audio is used.\n\n"
+        "A video longer than 90 s sent while no photo is set is used as background automatically; "
+        "otherwise tap **🎥 Background** under the clip.\n\n"
         "Perfect for lo-fi loops, animated backgrounds, lyric videos."
     ),
     "visualizer": (
@@ -133,6 +153,7 @@ NO_FILES = (
 NEED_MORE = {
     "audio": "🎵 Photo received! Now send the **Audio** file.",
     "visual": "🖼 Audio received! Now send a **Photo** (or a background video).",
+    "both": "👍 Clip saved. Now send a **Photo** and an **Audio** file.",
 }
 
 # ---------------------------------------------------------------- access
