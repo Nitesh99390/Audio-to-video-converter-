@@ -9,14 +9,16 @@ from core.helpers import gate, gate_cb
 from core.keyboards import (
     settings_keyboard, option_keyboard, OPTIONS, OPTION_TITLES, watermark_keyboard, title_keyboard,
     caption_keyboard, slideshow_keyboard, input_cancel_keyboard, confirm_keyboard, presets_keyboard,
-    quick_modes_keyboard, QUICK_MODES,
+    quick_modes_keyboard, QUICK_MODES, duration_keyboard, duration_label,
 )
 from core.state import state
 
 logger = logging.getLogger(__name__)
 
 SETTINGS_TEXT = "⚙️ **Settings Panel**\nTap any option to change it."
-INT_KEYS = {"fps", "slideshow_duration"}
+INT_KEYS = {"fps", "slideshow_duration", "target_duration"}
+DURATION_TEXT = ("⏱ **Final video length**\n\nIf longer than the audio, the audio is looped seamlessly. "
+                 "If shorter, the video is trimmed.\n\nCurrent: **{cur}**")
 
 
 async def _edit(cq: CallbackQuery, text: str, kb):
@@ -40,7 +42,30 @@ async def settings_cmd(client: Client, message: Message):
 async def quick_cmd(client: Client, message: Message):
     if not await gate(client, message):
         return
-    await message.reply_text("⚡ **Quick Modes**\nEk tap me platform-ready settings.", reply_markup=quick_modes_keyboard())
+    await message.reply_text("⚡ **Quick Modes**\nOne tap for platform-ready settings.", reply_markup=quick_modes_keyboard())
+
+
+@Client.on_message(filters.command("duration") & filters.private)
+async def duration_cmd(client: Client, message: Message):
+    """/duration            -> menu
+       /duration 10h        -> set directly"""
+    if not await gate(client, message):
+        return
+    uid = message.from_user.id
+    if len(message.command) > 1:
+        from core.helpers import parse_duration_text
+        secs = parse_duration_text(" ".join(message.command[1:]))
+        if secs is None or secs < 0:
+            await message.reply_text("❌ Could not parse. Examples: `10h`, `2h30m`, `90m`, `1:30:00`, `0` (same as audio)")
+            return
+        from core.config import Config
+        secs = min(secs, Config.MAX_OUTPUT_DURATION_SEC)
+        s = await db.update_setting(uid, "target_duration", int(secs))
+        await message.reply_text(f"✅ Final length set to **{duration_label(int(secs))}**", reply_markup=settings_keyboard(s))
+        return
+    s = await db.get_settings(uid)
+    await message.reply_text(DURATION_TEXT.format(cur=duration_label(int(s.get("target_duration") or 0))),
+                             reply_markup=duration_keyboard(int(s.get("target_duration") or 0)))
 
 
 @Client.on_message(filters.command("presets") & filters.private)
@@ -68,7 +93,7 @@ async def preset_cmd(client: Client, message: Message):
     elif action == "load":
         data = await db.get_preset(uid, name)
         if not data:
-            await message.reply_text("❌ Preset nahi mila.")
+            await message.reply_text("❌ Preset not found.")
             return
         await db.save_settings(uid, data)
         await message.reply_text(f"✅ Preset **{name}** loaded.", reply_markup=settings_keyboard(data))
@@ -86,7 +111,10 @@ async def menu_cb(client: Client, cq: CallbackQuery):
     uid = cq.from_user.id
     s = await db.get_settings(uid)
 
-    if key == "watermark":
+    if key == "target_duration":
+        cur = int(s.get("target_duration") or 0)
+        await _edit(cq, DURATION_TEXT.format(cur=duration_label(cur)), duration_keyboard(cur))
+    elif key == "watermark":
         wm = s.get("watermark_text") or "_(none)_"
         await _edit(cq, f"💧 **Watermark**\n\nCurrent: {wm}\nPosition: {s['watermark_position']}", watermark_keyboard(s))
     elif key == "title":
@@ -98,7 +126,7 @@ async def menu_cb(client: Client, cq: CallbackQuery):
                     "\n\nPlaceholders: `{title}` `{artist}` `{duration}` `{size}` `{resolution}` `{bot_name}`",
                     caption_keyboard())
     elif key == "slideshow":
-        await _edit(cq, "🎞 **Slideshow settings**\n\n2+ photos bhejne par apply hota hai.", slideshow_keyboard(s))
+        await _edit(cq, "🎞 **Slideshow settings**\n\nApplies when you send 2+ photos.", slideshow_keyboard(s))
     elif key == "output":
         await _edit(cq, OPTION_TITLES["output_mode"], option_keyboard("output_mode", s["output_mode"]))
     elif key in OPTIONS:
@@ -142,7 +170,7 @@ async def set_cb(client: Client, cq: CallbackQuery):
             return
         await db.reset_settings(uid)
         s = await db.get_settings(uid)
-        await _edit(cq, "♻️ Settings reset ho gayi.\n\n" + SETTINGS_TEXT, settings_keyboard(s))
+        await _edit(cq, "♻️ Settings reset to defaults.\n\n" + SETTINGS_TEXT, settings_keyboard(s))
         await cq.answer("Reset done ✅")
         return
 
@@ -155,9 +183,15 @@ async def set_cb(client: Client, cq: CallbackQuery):
     if key in OPTIONS and str(value) not in [str(o) for o in OPTIONS[key]]:
         await cq.answer("Invalid option")
         return
+    if key == "target_duration":
+        from core.config import Config
+        value = max(0, min(int(value), Config.MAX_OUTPUT_DURATION_SEC))
 
     s = await db.update_setting(uid, key, value)
-    await cq.answer(f"✅ {key.replace('_', ' ').title()} → {value or 'off'}")
+    if key == "target_duration":
+        await cq.answer(f"✅ Final length → {duration_label(int(value))}")
+    else:
+        await cq.answer(f"✅ {key.replace('_', ' ').title()} → {value or 'off'}")
 
     # return to the right menu
     if key in ("watermark_text", "watermark_position"):
@@ -180,14 +214,27 @@ async def toggle_cb(client: Client, cq: CallbackQuery):
     s = await db.get_settings(uid)
     if key == "language":
         new = "en" if s.get("language") == "hi" else "hi"
+    elif key == "engine":
+        new = "pro" if s.get("engine", "lite") == "lite" else "lite"
+        if new == "lite" and int(s.get("fps", 10)) > 30:
+            s["fps"] = 10
+            await db.save_settings(uid, s)
+        elif new == "pro" and int(s.get("fps", 10)) < 24:
+            s["fps"] = 30
+            await db.save_settings(uid, s)
     elif key in ("ken_burns", "fade", "spoiler"):
         new = not bool(s.get(key))
     else:
         await cq.answer("Unknown toggle")
         return
     s = await db.update_setting(uid, key, new)
-    await cq.answer(f"{key.replace('_', ' ').title()}: {'ON' if new is True else new if isinstance(new, str) else 'OFF'}")
-    await _edit(cq, SETTINGS_TEXT, settings_keyboard(s))
+    label = "ON" if new is True else (new.upper() if isinstance(new, str) else "OFF")
+    await cq.answer(f"{key.replace('_', ' ').title()}: {label}")
+    note = ""
+    if key == "engine":
+        note = ("\n\n⚡ **Lite:** 10 h video in ~2 min, tiny file, no visualizer." if new == "lite"
+                else "\n\n🎬 **Pro:** full re-encode with effects. Slow for long audio!")
+    await _edit(cq, SETTINGS_TEXT + note, settings_keyboard(s))
 
 
 # ================================================================ quick modes
@@ -206,8 +253,8 @@ async def quick_cb(client: Client, cq: CallbackQuery):
     await db.save_settings(uid, s)
     await cq.answer(f"✅ {QUICK_MODES[mode]['label']} applied", show_alert=False)
     session = state.get(uid) if state.exists(uid) else None
-    hint = "\n\n🚀 Files ready hain — 🎬 **Convert Now** dabao!" if session and session.ready else \
-           "\n\n📥 Ab Photo + Audio bhejo."
+    hint = "\n\n🚀 Files are ready — tap 🎬 **Convert Now**!" if session and session.ready else \
+           "\n\n📥 Now send a Photo + Audio."
     await _edit(cq, f"⚡ **{QUICK_MODES[mode]['label']}** applied!{hint}\n\n" + SETTINGS_TEXT, settings_keyboard(s))
 
 
@@ -222,13 +269,13 @@ async def preset_cb(client: Client, cq: CallbackQuery):
         session = state.get(uid)
         session.awaiting = "preset_name"
         session.awaiting_msg_id = cq.message.id
-        await _edit(cq, "💾 **Preset name type karo** (max 30 chars):", input_cancel_keyboard())
+        await _edit(cq, "💾 **Type a name for this preset** (max 30 chars):", input_cancel_keyboard())
         await cq.answer()
         return
     if action == "load":
         data = await db.get_preset(uid, name)
         if not data:
-            await cq.answer("Preset nahi mila", show_alert=True)
+            await cq.answer("Preset not found", show_alert=True)
             return
         merged = dict(DEFAULT_SETTINGS)
         merged.update(data)
@@ -258,10 +305,12 @@ async def input_cb(client: Client, cq: CallbackQuery):
         await cq.answer("Cancelled")
         return
     prompts = {
-        "watermark_text": "💧 **Watermark text bhejo** (e.g. `@YourChannel`):",
-        "title_text": "🔤 **Title text bhejo** (e.g. song name):",
-        "custom_caption": ("📝 **Caption bhejo.** Placeholders:\n`{title}` `{artist}` `{duration}` "
+        "watermark_text": "💧 **Send the watermark text** (e.g. `@YourChannel`):",
+        "title_text": "🔤 **Send the title text** (e.g. song name):",
+        "custom_caption": ("📝 **Send the caption.** Placeholders:\n`{title}` `{artist}` `{duration}` "
                            "`{size}` `{resolution}` `{bot_name}`"),
+        "target_duration": ("⏱ **Send the final video length.**\nExamples: `10h`, `2h30m`, `90m`, `1:30:00`, "
+                            "`0` = same as audio"),
     }
     if key not in prompts:
         await cq.answer("Unknown")

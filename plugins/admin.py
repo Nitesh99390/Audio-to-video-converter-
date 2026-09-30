@@ -14,7 +14,7 @@ from pyrogram.types import Message, CallbackQuery
 from core.config import Config
 from core.database import db
 from core.helpers import is_admin, uptime_str
-from core.keyboards import admin_keyboard
+from core.keyboards import admin_keyboard, approved_list_keyboard, pending_list_keyboard
 from core.state import state
 from core.utils import humanbytes, format_time, cleanup
 
@@ -26,15 +26,17 @@ admin_filter = filters.create(lambda _, __, m: bool(m.from_user and is_admin(m.f
 # ================================================================ /admin
 @Client.on_message(filters.command("admin") & admin_filter)
 async def admin_cmd(client: Client, message: Message):
-    await message.reply_text("👑 **Admin Panel**", reply_markup=admin_keyboard())
+    c = await db.access_counts()
+    await message.reply_text("👑 **Admin panel**", reply_markup=admin_keyboard(c["pending"], c["approved"]))
 
 
 async def stats_text() -> str:
     g = await db.global_stats()
+    c = await db.access_counts()
     return (
-        "📊 **Global Stats**\n\n"
+        "📊 **Global stats**\n\n"
         f"👥 Users: **{g.get('total_users', 0)}** (active 24h: {g.get('active_24h', 0)})\n"
-        f"⭐ Premium: {g.get('premium_users', 0)} • 🚫 Banned: {g.get('banned_users', 0)}\n"
+        f"🔑 Approved: {c['approved']} • ⏳ Pending: {c['pending']} • 🚫 Banned: {g.get('banned_users', 0)}\n"
         f"🎬 Videos: **{g.get('total_videos', 0)}**\n"
         f"📦 Output: {humanbytes(g.get('total_bytes', 0))}\n"
         f"⏱ Render time: {format_time(g.get('total_render_time', 0))}\n"
@@ -96,25 +98,60 @@ async def admin_cb(client: Client, cq: CallbackQuery):
         await cq.answer("⛔ Admins only", show_alert=True)
         return
     action = cq.matches[0].group(1)
-    text = "👑 **Admin Panel**"
+    text = "👑 **Admin panel**"
+    if action == "pending":
+        rows = await db.pending_requests()
+        text = (f"⏳ **Pending requests: {len(rows)}**\n\nTap a user to see approval buttons."
+                if rows else "✅ No pending requests.")
+        try:
+            await cq.message.edit_text(text, reply_markup=pending_list_keyboard(rows))
+        except Exception:
+            pass
+        await cq.answer()
+        return
+    if action == "approved":
+        rows = await db.approved_users()
+        now = time.time()
+        lines = [f"✅ **Approved users: {len(rows)}**\n"]
+        for r in rows[:30]:
+            left = "∞" if not r["expires_at"] else format_time(r["expires_at"] - now)
+            lines.append(f"• {(r.get('first_name') or '?')[:20]} `{r['user_id']}` — {left}")
+        lines.append("\nTap a user to extend / revoke.")
+        try:
+            await cq.message.edit_text("\n".join(lines), reply_markup=approved_list_keyboard(rows))
+        except Exception:
+            pass
+        await cq.answer()
+        return
     if action == "stats":
         text = await stats_text()
     elif action == "server":
         text = server_text()
     elif action == "broadcast_help":
-        text = ("📢 **Broadcast**\n\nKisi message par reply karke `/broadcast` bhejo — "
-                "wo saare users ko copy ho jayega.\n`/broadcast -pin` se pin bhi hoga.")
+        text = ("📢 **Broadcast**\n\nReply to any message with `/broadcast` — it will be copied to all users.\n"
+                "`/broadcast -pin` also pins it.")
     elif action == "users":
         ids = await db.all_user_ids()
         text = f"👥 **Users:** {len(ids)}\n\nLast 20 IDs:\n" + "\n".join(f"`{i}`" for i in ids[-20:])
     elif action == "ban_help":
-        text = ("🔨 **Moderation**\n\n`/ban <user_id> [reason]`\n`/unban <user_id>`\n"
-                "`/premium <user_id>` (toggle)\n`/users` — stats\n`/server` — server info")
+        text = ("🔨 **Admin commands**\n\n"
+                "**Access:**\n"
+                "`/approve <id> [1h|2h|5h|10h|3d|permanent]`\n"
+                "`/extend <id> <duration>` — add time\n"
+                "`/reject <id>` • `/revoke <id>`\n"
+                "`/pending` — list requests with buttons\n"
+                "`/approved` — list active users\n"
+                "`/access <id>` — manage one user\n\n"
+                "**Moderation:**\n"
+                "`/ban <id> [reason]` • `/unban <id>`\n"
+                "`/premium <id>` (toggle)\n`/users` — stats • `/server` — server info\n"
+                "`/broadcast` (reply to a message)")
     elif action == "cleanup":
         n, freed = cleanup_downloads(max_age=0)
         text = f"🧹 Cleaned **{n}** stale files, freed {humanbytes(freed)}."
+    c = await db.access_counts()
     try:
-        await cq.message.edit_text(text, reply_markup=admin_keyboard())
+        await cq.message.edit_text(text, reply_markup=admin_keyboard(c["pending"], c["approved"]))
     except Exception:
         pass
     await cq.answer()
@@ -149,7 +186,7 @@ async def ban_cmd(client: Client, message: Message):
     await db.set_ban(uid, True)
     await message.reply_text(f"🚫 User `{uid}` banned.\nReason: {reason}")
     try:
-        await client.send_message(uid, f"🚫 Aapko bot se ban kar diya gaya hai.\nReason: {reason}")
+        await client.send_message(uid, f"🚫 You have been banned from this bot.\nReason: {reason}")
     except Exception:
         pass
 
@@ -175,8 +212,8 @@ async def premium_cmd(client: Client, message: Message):
     await message.reply_text(f"⭐ User `{uid}` premium: **{'ON' if new else 'OFF'}**")
     try:
         await client.send_message(
-            uid, "⭐ Aapko **Premium** mil gaya! Unlimited daily conversions." if new
-            else "ℹ️ Aapka premium hata diya gaya hai.")
+            uid, "⭐ You now have **Premium**! Unlimited daily conversions." if new
+            else "ℹ️ Your premium has been removed.")
     except Exception:
         pass
 
@@ -184,7 +221,7 @@ async def premium_cmd(client: Client, message: Message):
 @Client.on_message(filters.command("broadcast") & admin_filter)
 async def broadcast_cmd(client: Client, message: Message):
     if not message.reply_to_message:
-        await message.reply_text("↩️ Kisi message par reply karke `/broadcast` bhejo.")
+        await message.reply_text("↩️ Reply to a message with `/broadcast`.")
         return
     pin = "-pin" in message.text
     ids = await db.all_user_ids()

@@ -27,6 +27,13 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
 class Config:
     # ---- Telegram credentials (REQUIRED) ----
     API_ID: int = _int("API_ID", 0)
@@ -34,12 +41,19 @@ class Config:
     BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "")
 
     # ---- Admin / owner ----
-    OWNER_ID: int = _int("OWNER_ID", 0)
+    # The owner receives every access request and can approve / reject it.
+    OWNER_ID: int = _int("OWNER_ID", 6069200310)
     ADMINS: set = {
         int(x) for x in os.environ.get("ADMINS", "").replace(",", " ").split() if x.strip().lstrip("-").isdigit()
     }
     if OWNER_ID:
         ADMINS.add(OWNER_ID)
+
+    # ---- Access / approval system ----
+    # When ON, every non-admin user must be approved by the owner before using the bot.
+    ACCESS_REQUIRED: bool = _bool("ACCESS_REQUIRED", True)
+    # Minutes a user has to wait before sending another request after a rejection / expiry.
+    REQUEST_COOLDOWN_MIN: int = _int("REQUEST_COOLDOWN_MIN", 10)
 
     # ---- Optional channels ----
     LOG_CHANNEL: int = _int("LOG_CHANNEL", 0)          # send every generated video here
@@ -49,11 +63,19 @@ class Config:
 
     # ---- Limits ----
     MAX_FILE_SIZE_MB: int = _int("MAX_FILE_SIZE_MB", 2000)
-    MAX_AUDIO_DURATION_SEC: int = _int("MAX_AUDIO_DURATION_SEC", 4 * 3600)
-    MAX_CONCURRENT_TASKS: int = _int("MAX_CONCURRENT_TASKS", 3)
+    MAX_AUDIO_DURATION_SEC: int = _int("MAX_AUDIO_DURATION_SEC", 24 * 3600)
+    MAX_OUTPUT_DURATION_SEC: int = _int("MAX_OUTPUT_DURATION_SEC", 24 * 3600)
+    MAX_OUTPUT_SIZE_MB: int = _int("MAX_OUTPUT_SIZE_MB", 1950)   # Telegram bot upload cap (~2 GB)
+    MAX_CONCURRENT_TASKS: int = _int("MAX_CONCURRENT_TASKS", 2)
     MAX_SLIDESHOW_IMAGES: int = _int("MAX_SLIDESHOW_IMAGES", 20)
-    DAILY_LIMIT_FREE: int = _int("DAILY_LIMIT_FREE", 30)
+    DAILY_LIMIT_FREE: int = _int("DAILY_LIMIT_FREE", 0)          # 0 = unlimited (approval is the gate)
     FFMPEG_THREADS: int = _int("FFMPEG_THREADS", 0)  # 0 = auto
+
+    # ---- Lite (fast) engine ----
+    # Length of the pre-rendered video segment that gets loop-copied to the full duration.
+    LITE_SEGMENT_SEC: int = _int("LITE_SEGMENT_SEC", 60)
+    # Max seconds of a background video that will be re-encoded for the loop segment.
+    LITE_MAX_BG_VIDEO_SEC: int = _int("LITE_MAX_BG_VIDEO_SEC", 600)
 
     # ---- Paths ----
     DOWNLOAD_DIR: str = os.environ.get("DOWNLOAD_DIR", "downloads")
@@ -61,7 +83,7 @@ class Config:
     SESSION_NAME: str = os.environ.get("SESSION_NAME", "advanced_audio_video_bot")
 
     # ---- Branding ----
-    BOT_NAME: str = os.environ.get("BOT_NAME", "Advanced Audio → Video Bot")
+    BOT_NAME: str = os.environ.get("BOT_NAME", "Audio → Video Bot")
     DEFAULT_CAPTION: str = os.environ.get("DEFAULT_CAPTION", "🎬 Made with {bot_name}")
 
     @classmethod

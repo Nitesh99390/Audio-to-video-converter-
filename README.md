@@ -1,125 +1,113 @@
-# 🎬 Advanced Audio → Video Telegram Bot
+# 🎬 Audio → Video Telegram Bot (Lite engine + Approval system)
 
-Professional, production-ready Telegram bot that turns **Audio + Photo(s)/Video** into a polished **MP4 video** — ready for YouTube, Shorts, Reels, Instagram and WhatsApp Status.
+Private Telegram bot that turns **Audio + Photo** into a light, YouTube-ready **MP4** —
+a **10-hour video in about 1-2 minutes**. Built for channels where people only *listen*:
+the picture is static, the file is tiny, the upload is fast.
 
-Built with **Pyrogram** (async MTProto) + **FFmpeg** + **SQLite**.
+Built with **Pyrogram** + **FFmpeg** + **SQLite**. UI language: **English**.
+
+---
+
+## ⚡ How the Lite engine is so fast
+
+| Step | What happens | Time (10 h video) |
+|---|---|---|
+| 1. Audio | MP3/AAC is **stream-copied** (no re-encode). WAV/FLAC/OGG are converted **once** to AAC. | 0 s – 1 min |
+| 2. Segment | One **60 s** clip is encoded from the photo (10 fps, single keyframe) → ~70 KB | ~2 s |
+| 3. Loop | The segment is looped with `-stream_loop` and **stream-copied** next to the audio | ~20 s |
+
+Result for a 1 h MP3 looped to 10 h: **~600 MB, 1280x720, ready in ~25 s** (mostly disk I/O).
+The video part is < 50 MB — the file is basically just your audio.
+
+Measured in the sandbox (2 vCPU):
+
+```
+1h mp3 -> 10h video      23.8 s   598 MB   1280x720
+1h mp3 -> 1h 1080p 1fps   2.4 s    59 MB   1920x1080
+2 photos slideshow 2h     5.3 s   157 MB
+title + watermark 1h      4.4 s    60 MB
+```
+
+A **Pro engine** (full re-encode, visualizer, Ken-Burns, fade, 4K) is still available in Settings.
+
+---
+
+## 🔐 Approval system (owner ID `6069200310`)
+
+* New users see **📨 Request Access**. One tap sends the request to the owner.
+* The owner gets a message with one-tap buttons:
+  `30 min · 1 hour · 2 hours · 3 hours · 5 hours · 10 hours · 1 day · 3 days · 7 days · 30 days · ♾ Permanent · ❌ Reject · 🚫 Ban`
+* The user is notified instantly, gets the full keyboard and can convert until the time runs out.
+* When time expires the user is told automatically and can request again; the owner gets a note with **➕ extend** buttons.
+* Owner commands: `/approve <id> [10h]`, `/extend <id> 5h`, `/reject <id>`, `/revoke <id>`, `/pending`, `/approved`, `/access <id>`.
+* Admin panel (👑 button) shows pending / approved lists with inline management.
+
+Set `ACCESS_REQUIRED=false` to make the bot public.
 
 ---
 
 ## ✨ Features
 
-### 🎥 Rendering
-| Feature | Options |
-|---|---|
-| Resolution | 480p · 720p · 1080p · 1440p · 4K (2160p) · original |
-| Aspect ratio | 16:9 · 9:16 · 1:1 · 4:3 · 4:5 · 21:9 |
-| Image fit | **blur** (blurred bg fill) · crop · pad · stretch |
-| FPS | 24 · 25 · 30 · 60 |
-| Quality | low · medium · high · ultra (CRF based) |
-| Codec | H.264 (compat) · H.265/HEVC (smaller) |
-| Audio | stream-copy (fastest) · AAC 128/192/320k · MP3 |
-| Visualizer | waves · bars · spectrum · CQT · vectorscope · circle — 8 colors, 3 positions |
-| Effects | Ken-Burns slow zoom · fade in/out (video + audio) |
-| Overlays | Watermark text (5 positions) · Title text (3 positions) |
-| Modes | Single image · **Slideshow** (2–20 photos, cross-fade) · **Looping video background** |
-| Extras | Multi-audio merge · auto album-art extraction · custom thumbnail · spoiler · send as video/document |
-
-### ⌨️ UI
-- **Persistent reply keyboard** (bottom buttons): Convert Now · Quick Modes · Settings · Presets · My Files · Clear · Stats · Help · About (+ Admin Panel)
-- **Inline settings panel** – every option one tap away, live values shown on buttons
-- **⚡ Quick Modes** – YouTube 1080p, Shorts/Reels, Instagram Square, WhatsApp Status, Music Video, Podcast, Fastest, 4K
-- **🎛 Presets** – save / load / delete your own setting bundles
-- **Live progress** – download → merge → render (%, speed, ETA) → upload, with ❌ Cancel button
-- **After-video actions** – re-render same files with new settings, start new
-
-### 🛡 Platform
-- Job **queue** with concurrency limit · per-user single job · cancel kills FFmpeg instantly
-- **SQLite** persistence: users, settings, presets, usage, history, global stats
-- Daily free limit + **premium** users · **ban/unban** · **force-subscribe** channel · **log channel**
-- **Admin panel**: stats, server info (CPU/RAM/disk), broadcast (with pin), cleanup
-- Auto maintenance: stale sessions & orphan files purged
-- Hinglish/English UI toggle · bot command menu auto-registered
+* ⏱ **Duration menu** – same as audio / 30 min / 1 h / 2 h / 3 h / 5 h / 8 h / 10 h / 12 h / custom (`4h30m`). Longer than the audio → audio is looped seamlessly.
+* 🖼 Single photo · 2-20 photo **slideshow** · looping **video background**
+* 📐 480p → 4K, all aspect ratios, blur / crop / pad / stretch fit
+* 🎞 FPS 1-30 in Lite mode (1 fps = smallest possible file)
+* 🎵 Audio copy or AAC 64-320k / MP3 (auto-lowered to stay under Telegram's 2 GB cap)
+* 💧 Watermark & 🔤 Title text (work in Lite mode too)
+* ⚡ Quick Modes: Lite 720p · Lite 1080p · Tiniest file · YouTube Pro · Shorts · Music Video · Podcast · 4K
+* 🎛 Presets, live progress with ETA, cancel button, job queue
+* 👑 Admin: stats, server info, broadcast, ban/unban, cleanup
 
 ---
 
 ## 🚀 Setup
 
-### 1. Credentials
-- `API_ID`, `API_HASH` → https://my.telegram.org
-- `BOT_TOKEN` → [@BotFather](https://t.me/BotFather)
-
-### 2. Run locally
 ```bash
 git clone <repo> && cd <repo>
-cp .env.example .env        # fill in values
+cp .env.example .env        # fill API_ID, API_HASH, BOT_TOKEN (OWNER_ID defaults to 6069200310)
 pip install -r requirements.txt
-sudo apt install ffmpeg fonts-dejavu-core   # Debian/Ubuntu
+sudo apt install ffmpeg fonts-dejavu-core
 python bot.py
 ```
 
-### 3. Docker
-```bash
-cp .env.example .env && nano .env
-docker compose up -d --build
-```
+**Docker:** `cp .env.example .env && docker compose up -d --build`
 
-### 4. Kaggle / Colab
-Add `API_ID`, `API_HASH`, `BOT_TOKEN`, `OWNER_ID` as **Secrets**, then:
-```python
-!apt-get -qq install -y ffmpeg fonts-dejavu-core
-!pip -q install -r requirements.txt
-!python bot.py
-```
+**Kaggle / Colab:** add `API_ID`, `API_HASH`, `BOT_TOKEN` as secrets, then
+`!apt-get -qq install -y ffmpeg fonts-dejavu-core && pip -q install -r requirements.txt && python bot.py`
 
----
-
-## ⚙️ Environment variables
-See [`.env.example`](.env.example). Only `API_ID`, `API_HASH`, `BOT_TOKEN` are required.
-
-| Var | Default | Purpose |
-|---|---|---|
-| `OWNER_ID` / `ADMINS` | – | Admin access (`/admin`, broadcast, ban…) |
-| `LOG_CHANNEL` | – | Copy every generated video here |
-| `FORCE_SUB_CHANNEL` | – | Require channel join (bot must be admin) |
-| `MAX_CONCURRENT_TASKS` | 3 | Parallel FFmpeg renders |
-| `DAILY_LIMIT_FREE` | 30 | Free conversions/day (premium = unlimited) |
-| `MAX_SLIDESHOW_IMAGES` | 20 | Photos per slideshow |
-| `MAX_FILE_SIZE_MB` | 2000 | Upload size cap |
+> The owner must press **/start** in the bot once so it can send them access requests.
 
 ---
 
 ## 📋 Commands
 
-**User:** `/start` `/convert` `/settings` `/quick` `/presets` `/preset save|load|del <name>` `/files` `/clear` `/cancel` `/stats` `/history` `/help` `/about` `/ping`
+**User:** `/start` `/convert` `/duration [10h]` `/request` `/myaccess` `/settings` `/quick` `/presets` `/files` `/clear` `/cancel` `/stats` `/history` `/help` `/about` `/ping`
 
-**Admin:** `/admin` `/broadcast [-pin]` (reply to a message) `/users` `/server` `/ban <id> [reason]` `/unban <id>` `/premium <id>`
+**Owner / admin:** `/admin` `/pending` `/approved` `/approve <id> [duration]` `/extend <id> <duration>` `/reject <id>` `/revoke <id>` `/access <id>` `/broadcast` `/ban` `/unban` `/premium` `/users` `/server`
 
 ---
 
 ## 🗂 Project structure
 ```
-bot.py                 # entry point, command registration, maintenance loop
+bot.py                 # entry point, command registration, background tasks
 core/
-  config.py            # env config
-  database.py          # aiosqlite layer (users/settings/presets/stats/history)
-  engine.py            # FFmpeg command builder + progress-streaming runner
-  keyboards.py         # reply keyboard + all inline menus
-  state.py             # per-user sessions, job registry, cancel, semaphore
-  helpers.py           # access gate, force-sub, files panel
-  strings.py           # UI texts
+  config.py            # env config (owner, approval, limits, lite engine)
+  database.py          # aiosqlite layer (users/settings/presets/access/history)
+  engine.py            # Pro FFmpeg render + progress runner
+  lite_engine.py       # ⚡ loop-copy engine (segment → stream-copy loop)
+  keyboards.py         # reply keyboard + inline menus + approval buttons
+  state.py             # per-user sessions, job registry, cancel
+  helpers.py           # access gate, force-sub, files panel, duration parser
+  strings.py           # UI texts (English)
   utils.py             # ffprobe, progress bar, formatting, cleanup
 plugins/
-  start.py             # /start /help /about /stats /history + reply-button router
+  start.py             # /start /help /stats + reply-button router
+  access.py            # 🔐 request / approve / extend / revoke / expiry watcher
   media.py             # photo / album / audio / voice / video / document intake
-  convert.py           # conversion pipeline (queue → render → upload → log)
-  settings.py          # settings menus, toggles, quick modes, presets, text input
+  convert.py           # pipeline (queue → lite|pro render → upload → log)
+  settings.py          # settings menus, duration menu, quick modes, presets
   admin.py             # admin panel & moderation
 ```
-
----
-
-## 🧪 Tested
-The FFmpeg engine was validated against 15 configurations (all fit modes, all visualizers, slideshow with/without fade, looping video background, H.265, "original" resolution, AAC re-encode, watermark + title + fade) plus an end-to-end pipeline test covering audio merge, mid-render cancel and document output.
 
 ## 📄 License
 MIT

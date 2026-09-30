@@ -10,10 +10,12 @@ from pyrogram.types import Message, CallbackQuery
 
 from core.config import Config
 from core.database import db
-from core.keyboards import force_sub_keyboard, files_keyboard
+from core.keyboards import force_sub_keyboard, files_keyboard, request_access_keyboard, duration_label
 from core.state import state, Session
-from core.strings import FORCE_SUB, BANNED
-from core.utils import format_duration, humanbytes
+from core.strings import (
+    FORCE_SUB, BANNED, ACCESS_REQUIRED, ACCESS_PENDING, ACCESS_EXPIRED, ACCESS_REJECTED,
+)
+from core.utils import format_duration, format_time, humanbytes
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,25 @@ def is_admin(user_id: int) -> bool:
     return user_id in Config.ADMINS
 
 
+def is_owner(user_id: int) -> bool:
+    return user_id == Config.OWNER_ID or (not Config.OWNER_ID and user_id in Config.ADMINS)
+
+
+def fmt_expiry(expires_at: float) -> str:
+    if not expires_at:
+        return "never (permanent)"
+    return time.strftime("%d %b %Y, %H:%M UTC", time.gmtime(expires_at))
+
+
+def fmt_left(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "no access"
+    if seconds == float("inf"):
+        return "unlimited"
+    return format_time(seconds)
+
+
+# ---------------------------------------------------------------- force sub
 async def check_force_sub(client: Client, user_id: int) -> Optional[str]:
     """Return invite link if the user must join; None if OK."""
     if not Config.FORCE_SUB_CHANNEL or is_admin(user_id):
@@ -41,7 +62,6 @@ async def check_force_sub(client: Client, user_id: int) -> Optional[str]:
     except Exception as e:
         logger.warning("Force-sub error: %s", e)
         return None
-    # build link
     try:
         chat = await client.get_chat(chat_id)
         link = chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else None)
@@ -52,7 +72,26 @@ async def check_force_sub(client: Client, user_id: int) -> Optional[str]:
         return f"https://t.me/{chan.lstrip('@')}" if not chan.lstrip("-").isdigit() else None
 
 
-async def gate(client: Client, message: Message) -> bool:
+# ---------------------------------------------------------------- approval
+async def access_block_text(user_id: int) -> Optional[str]:
+    """Return the text to show if the user is NOT allowed; None if allowed."""
+    if not Config.ACCESS_REQUIRED or is_admin(user_id):
+        return None
+    if await db.has_access(user_id):
+        return None
+    a = await db.get_access(user_id)
+    if not a:
+        return ACCESS_REQUIRED
+    if a["status"] == "pending":
+        return ACCESS_PENDING
+    if a["status"] == "rejected":
+        return ACCESS_REJECTED.format(cooldown=Config.REQUEST_COOLDOWN_MIN)
+    if a["status"] == "approved":          # approved but expired
+        return ACCESS_EXPIRED
+    return ACCESS_REQUIRED
+
+
+async def gate(client: Client, message: Message, need_access: bool = True) -> bool:
     """Common access gate. Returns True if user may continue."""
     user = message.from_user
     if not user:
@@ -65,19 +104,30 @@ async def gate(client: Client, message: Message) -> bool:
     if link:
         await message.reply_text(FORCE_SUB, reply_markup=force_sub_keyboard(link))
         return False
+    if need_access:
+        block = await access_block_text(user.id)
+        if block:
+            await message.reply_text(block, reply_markup=request_access_keyboard())
+            return False
     return True
 
 
-async def gate_cb(client: Client, cq: CallbackQuery) -> bool:
+async def gate_cb(client: Client, cq: CallbackQuery, need_access: bool = True) -> bool:
     user = cq.from_user
     if await db.is_banned(user.id) and not is_admin(user.id):
         await cq.answer(BANNED, show_alert=True)
         return False
+    if need_access:
+        block = await access_block_text(user.id)
+        if block:
+            await cq.answer("🔐 You need approval to use this. Tap 🔑 My Access.", show_alert=True)
+            return False
     return True
 
 
+# ---------------------------------------------------------------- panels
 def session_summary(session: Session, settings: dict) -> str:
-    lines = ["📂 **Current Files**\n"]
+    lines = ["📂 **Current files**\n"]
     if session.bg_video:
         lines.append("🎥 Background video: ✅")
     elif session.photos:
@@ -85,28 +135,37 @@ def session_summary(session: Session, settings: dict) -> str:
         lines.append(f"🖼 Photos: **{n}** " + ("(slideshow)" if n > 1 else ""))
     else:
         lines.append("🖼 Photos: ❌ _(send a photo)_")
+    audio_dur = 0
     if session.audios:
         n = len(session.audios)
         info = session.audio_info
-        dur = format_duration(info.get("duration", 0)) if info else "?"
+        audio_dur = info.get("duration", 0) if info else 0
+        dur = format_duration(audio_dur) if info else "?"
         extra = f" ({n} files merged)" if n > 1 else ""
         title = f" – _{info.get('title')}_" if info and info.get("title") else ""
         lines.append(f"🎵 Audio: ✅ `{dur}`{extra}{title}")
     else:
         lines.append("🎵 Audio: ❌ _(send an audio)_")
     lines.append("")
-    vis = settings["visualizer"]
+    target = int(settings.get("target_duration") or 0)
+    engine = "⚡ Lite" if settings.get("engine", "lite") == "lite" else "🎬 Pro"
+    if target:
+        loop_note = " (audio looped)" if audio_dur and target > audio_dur else ""
+        lines.append(f"⏱ **Final length:** {format_duration(target)}{loop_note}")
+    else:
+        lines.append("⏱ **Final length:** same as audio")
     lines.append(
-        f"⚙️ **Output:** {settings['resolution']} • {settings['aspect']} • {settings['fit']} • "
-        f"{settings['fps']}fps • {settings['quality']} • {settings['codec'].upper()}"
+        f"⚙️ **Output:** {engine} • {settings['resolution']} • {settings['aspect']} • {settings['fit']} • "
+        f"{settings['fps']}fps • {settings['quality']}"
     )
     extras = []
-    if vis != "none":
-        extras.append(f"🌊 {vis}/{settings['vis_color']}")
-    if settings.get("ken_burns"):
-        extras.append("🎥 Ken Burns")
-    if settings.get("fade"):
-        extras.append("🌓 Fade")
+    if settings.get("engine") == "pro":
+        if settings["visualizer"] != "none":
+            extras.append(f"🌊 {settings['visualizer']}/{settings['vis_color']}")
+        if settings.get("ken_burns"):
+            extras.append("🎥 Ken Burns")
+        if settings.get("fade"):
+            extras.append("🌓 Fade")
     if settings.get("watermark_text"):
         extras.append("💧 Watermark")
     if settings.get("title_text"):
@@ -114,7 +173,7 @@ def session_summary(session: Session, settings: dict) -> str:
     if extras:
         lines.append("✨ " + " • ".join(extras))
     if session.ready:
-        lines.append("\n🚀 **Ready!** Press CONVERT NOW.")
+        lines.append("\n🚀 **Ready!** Tap CONVERT NOW.")
     return "\n".join(lines)
 
 
@@ -139,3 +198,23 @@ def uptime_str() -> str:
     h, s = divmod(s, 3600)
     m, s = divmod(s, 60)
     return f"{d}d {h}h {m}m {s}s" if d else f"{h}h {m}m {s}s"
+
+
+def parse_duration_text(text: str) -> Optional[int]:
+    """Parse '10h', '2h30m', '90m', '1:30:00', '5400' -> seconds."""
+    import re
+    t = text.strip().lower().replace(" ", "")
+    if not t:
+        return None
+    if re.fullmatch(r"\d+", t):
+        v = int(t)
+        return v * 60 if v <= 24 * 60 and v < 1000 else v   # plain number: minutes if small, else seconds
+    m = re.fullmatch(r"(?:(\d+):)?(\d{1,2}):(\d{2})", t)
+    if m:
+        h = int(m.group(1) or 0)
+        return h * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+    m = re.fullmatch(r"(?:(\d+(?:\.\d+)?)h(?:ours?|rs?)?)?(?:(\d+)m(?:in(?:utes?)?)?)?(?:(\d+)s(?:ec(?:onds?)?)?)?", t)
+    if m and any(m.groups()):
+        h = float(m.group(1) or 0)
+        return int(h * 3600) + int(m.group(2) or 0) * 60 + int(m.group(3) or 0)
+    return None
