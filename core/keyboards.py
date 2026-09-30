@@ -112,7 +112,8 @@ def start_keyboard(uid: Optional[int] = None) -> InlineKeyboardMarkup:
 def help_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [_btn("🖼 Photo + Audio", "help:basic"), _btn("⏱ Duration / Loop", "help:duration")],
-        [_btn("🎞 Slideshow", "help:slideshow"), _btn("🎥 Video background", "help:bgvideo")],
+        [_btn("🎬 Intro & Outro", "help:introoutro"), _btn("🎥 Video background", "help:bgvideo")],
+        [_btn("🎞 Slideshow", "help:slideshow")],
         [_btn("💧 Watermark & Title", "help:watermark"), _btn("📋 Commands", "help:commands")],
     ]
     if is_admin:
@@ -204,12 +205,29 @@ def files_keyboard(session, ready: bool) -> InlineKeyboardMarkup:
         row.append(_btn(f"🗑 Audio ({len(session.audios)})", "files:clear_audio"))
     if session.bg_video:
         row.append(_btn("🗑 Video", "files:clear_video"))
-    if len(row) > 1:
-        row.append(_btn("🗑 All", "files:clear_all"))
-        rows.append(row)
-    elif row:
+    clip_row = []
+    if session.intro:
+        clip_row.append(_btn("🗑 Intro", "files:clear_intro"))
+    if session.outro:
+        clip_row.append(_btn("🗑 Outro", "files:clear_outro"))
+    if session.intro and session.outro:
+        clip_row.append(_btn("🔃 Swap", "files:swap_clips"))
+    total = len(row) + len(clip_row)
+    if total > 1:
+        rows.append(row) if row else None
+        if clip_row:
+            rows.append(clip_row)
+        rows.append([_btn("🗑 Remove all files", "files:clear_all")])
+    elif total == 1:
         rows.append([_btn("🗑 Remove file", "files:clear_all")])
     return InlineKeyboardMarkup(rows) if rows else None
+
+
+def video_role_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Shown right after a video is received: lets the user move it to another slot."""
+    opts = [("intro", "🎬 Intro"), ("outro", "🏁 Outro"), ("bg", "🎥 Background")]
+    row = [_btn(_mark(lbl, k == current), f"vrole:{current}:{k}") for k, lbl in opts]
+    return InlineKeyboardMarkup([row, [_btn("🗑 Remove this clip", f"vrole:{current}:remove")]])
 
 
 def cancel_keyboard() -> InlineKeyboardMarkup:

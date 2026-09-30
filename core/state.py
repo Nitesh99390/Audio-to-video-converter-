@@ -15,6 +15,10 @@ class Session:
     photos: List[str] = field(default_factory=list)      # 1 photo = normal, >1 = slideshow
     audios: List[str] = field(default_factory=list)      # >1 = merge into one track
     bg_video: Optional[str] = None                        # loop a video instead of image
+    intro: Optional[str] = None                           # short clip played BEFORE the main video
+    outro: Optional[str] = None                           # short clip played AFTER the main video
+    intro_info: dict = field(default_factory=dict)
+    outro_info: dict = field(default_factory=dict)
     audio_info: dict = field(default_factory=dict)
     awaiting: Optional[str] = None                        # text input mode e.g. "watermark_text"
     awaiting_msg_id: Optional[int] = None
@@ -36,10 +40,15 @@ class Session:
     def ready(self) -> bool:
         return self.has_visual and self.has_audio
 
+    @property
+    def has_intro_outro(self) -> bool:
+        return bool(self.intro or self.outro)
+
     def all_files(self) -> List[str]:
         files = list(self.photos) + list(self.audios)
-        if self.bg_video:
-            files.append(self.bg_video)
+        for f in (self.bg_video, self.intro, self.outro):
+            if f:
+                files.append(f)
         return files
 
 

@@ -139,6 +139,9 @@ async def gate_cb(client: Client, cq: CallbackQuery, need_access: bool = True) -
 # ---------------------------------------------------------------- panels
 def session_summary(session: Session, settings: dict) -> str:
     lines = ["📂 **Your files**\n"]
+    if session.intro:
+        d = format_duration(session.intro_info.get("duration", 0)) if session.intro_info else "?"
+        lines.append(f"🎬 Intro ✓ `{d}`")
     if session.bg_video:
         lines.append("🎥 Background video ✓")
     elif session.photos:
@@ -157,14 +160,23 @@ def session_summary(session: Session, settings: dict) -> str:
         lines.append(f"🎵 Audio ✓ `{dur}`{extra}{title}")
     else:
         lines.append("🎵 Audio — _waiting_")
+    if session.outro:
+        d = format_duration(session.outro_info.get("duration", 0)) if session.outro_info else "?"
+        lines.append(f"🏁 Outro ✓ `{d}`")
     lines.append("")
     target = int(settings.get("target_duration") or 0)
     engine = "⚡ Lite" if settings.get("engine", "lite") == "lite" else "🎬 Pro"
+    extra_len = 0.0
+    if session.intro:
+        extra_len += float(session.intro_info.get("duration", 0) or 0)
+    if session.outro:
+        extra_len += float(session.outro_info.get("duration", 0) or 0)
+    clip_note = f" + {format_duration(extra_len)} intro/outro" if extra_len else ""
     if target:
         loop_note = " · audio looped" if audio_dur and target > audio_dur else ""
-        lines.append(f"⏱ Length: **{format_duration(target)}**{loop_note}")
+        lines.append(f"⏱ Length: **{format_duration(target)}**{clip_note}{loop_note}")
     else:
-        lines.append("⏱ Length: **same as audio**")
+        lines.append(f"⏱ Length: **same as audio**{clip_note}")
     lines.append(f"⚙️ {engine} · {settings['resolution']} · {settings['aspect']} · {settings['fps']} fps · audio {settings['audio_mode']}")
     extras = []
     if settings.get("engine") == "pro":
@@ -181,6 +193,9 @@ def session_summary(session: Session, settings: dict) -> str:
     if extras:
         lines.append("✨ " + " · ".join(extras))
     if session.ready:
+        if session.has_intro_outro:
+            parts = (["intro"] if session.intro else []) + ["photo + audio"] + (["outro"] if session.outro else [])
+            lines.append("🧩 Order: `" + " → ".join(parts) + "`")
         lines.append("\n🚀 Ready — tap **Convert now**.")
     elif not session.has_visual and not session.has_audio:
         lines.append("\nSend a **photo** and an **audio** file to begin.")

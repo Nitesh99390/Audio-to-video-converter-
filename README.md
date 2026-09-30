@@ -3,6 +3,15 @@
 Private Telegram bot that turns **Audio + Photo** into a light, YouTube-ready **MP4** —
 a **10-hour video in about 1-2 minutes**. Built for channels where people only *listen*:
 the picture is static, the file is tiny, the upload is fast.
+Optionally add a short **intro** and **outro** clip: `[ intro ] + [ photo + audio ] + [ outro ]`.
+
+**How it works (in the bot)**
+
+1. Send an intro video *(optional)*
+2. Send a photo
+3. Send an outro video *(optional)*
+4. Send an audio file
+5. Tap **🎬 Convert Now**
 
 Built with **Pyrogram** + **FFmpeg** + **SQLite**. UI language: **English**.
 
@@ -31,6 +40,24 @@ title + watermark 1h      4.4 s    60 MB
 A **Pro engine** (full re-encode, visualizer, Ken-Burns, fade, 4K) exists as well — **admins only**
 (`PRO_ENGINE_ADMIN_ONLY=true`). Every other approved user gets Lite; Pro options are never shown to them
 and any stored Pro setting is silently downgraded before rendering.
+
+---
+
+## 🎬 Intro / Outro (no re-encode of the long part)
+
+| Step | What happens | Time |
+|---|---|---|
+| 1. Normalize | Each clip (≤ 5 min) is re-encoded **once** to the main video's exact size / fps / codec / audio format. Clips without sound get a silent track. Nothing is cropped — black bars are added. | a few seconds |
+| 2. Join | `concat` demuxer joins `intro + main + outro` with `-c copy` | disk speed |
+| 3. Fallback | If the main audio codec cannot be matched (e.g. FLAC), the main **audio** is re-packed to AAC once (video still copied) and the join is retried | ~1x audio length |
+
+Measured: 10 min lite video + 4 s intro + 3 s outro → joined in **2.6 s**.
+
+* The **first** video a user sends becomes the intro, the **second** the outro. A video longer than
+  `INTRO_OUTRO_AUTO_SEC` (90 s) sent while no photo is set is treated as a background loop.
+* Under every received clip: `🎬 Intro · 🏁 Outro · 🎥 Background · 🗑 Remove` — one tap moves it (slots swap).
+* The files panel shows the order (`intro → photo + audio → outro`), a `🔃 Swap` button and per-slot remove buttons.
+* **⏱ Duration** applies to the main part; intro/outro length is added on top.
 
 ---
 
@@ -83,6 +110,7 @@ Set `ACCESS_REQUIRED=false` to make the bot public.
 
 * ⏱ **Duration menu** – same as audio / 30 min / 1 h / 2 h / 3 h / 5 h / 8 h / 10 h / 12 h / custom (`4h30m`). Longer than the audio → audio is looped seamlessly.
 * 🖼 Single photo · 2-20 photo **slideshow** · looping **video background**
+* 🎬 **Intro + 🏁 Outro** clips joined by stream copy — the long main video is never re-encoded
 * 📐 480p → 4K, all aspect ratios, blur / crop / pad / stretch fit
 * 🎞 FPS 1-30 in Lite mode (1 fps = smallest possible file)
 * 🔐 Pro engine locked to admins; users only ever see Lite options
@@ -133,6 +161,7 @@ core/
   database.py          # aiosqlite layer (users/settings/presets/access/history)
   engine.py            # Pro FFmpeg render + progress runner
   lite_engine.py       # ⚡ loop-copy engine (segment → stream-copy loop)
+  intro_outro.py       # 🎬 normalize intro/outro clips once → concat stream-copy (AAC fallback)
   keyboards.py         # minimal reply keyboard + tiered inline menus (Settings / Advanced / Effects)
   state.py             # per-user sessions, job registry, cancel
   helpers.py           # access gate, force-sub, files panel, duration parser
@@ -141,7 +170,7 @@ core/
 plugins/
   start.py             # /start /help /stats + reply-button router
   access.py            # 🔐 request / approve / extend / revoke / expiry watcher
-  media.py             # photo / album / audio / voice / video / document intake
+  media.py             # photo / album / audio / voice / video (intro / outro / background) / document intake
   convert.py           # pipeline (queue → lite|pro render → upload → log)
   settings.py          # settings menus, duration menu, quick modes, presets
   admin.py             # admin panel & moderation

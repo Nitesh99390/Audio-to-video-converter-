@@ -15,6 +15,7 @@ from core.config import Config
 from core.database import db
 from core.engine import RenderPlan, build_command, render, merge_audios, RenderError
 from core.lite_engine import render_lite
+from core.intro_outro import attach_intro_outro
 from core.helpers import gate, gate_cb, is_admin, send_files_panel, get_settings
 from core.keyboards import cancel_keyboard, after_video_keyboard
 from core.lite_engine import LITE_AUDIO_BITRATE
@@ -88,12 +89,28 @@ async def clear_or_files_cmd(client: Client, message: Message):
         await send_files_panel(message, uid)
 
 
-@Client.on_callback_query(filters.regex(r"^files:(clear_photos|clear_audio|clear_video|clear_all)$"))
+@Client.on_callback_query(filters.regex(r"^files:(clear_photos|clear_audio|clear_video|clear_intro|clear_outro|swap_clips|clear_all)$"))
 async def files_cb(client: Client, cq: CallbackQuery):
     uid = cq.from_user.id
     action = cq.matches[0].group(1)
     session = state.get(uid)
-    if action == "clear_photos":
+    if state.is_processing(uid) and action != "clear_all":
+        await cq.answer("⏳ Wait for the running job to finish.", show_alert=True)
+        return
+    if action == "clear_intro":
+        cleanup(session.intro)
+        session.intro, session.intro_info = None, {}
+    elif action == "clear_outro":
+        cleanup(session.outro)
+        session.outro, session.outro_info = None, {}
+    elif action == "swap_clips":
+        session.intro, session.outro = session.outro, session.intro
+        session.intro_info, session.outro_info = session.outro_info, session.intro_info
+        session.touch()
+        await cq.answer("🔃 Intro and outro swapped")
+        await send_files_panel(cq, uid, edit=True)
+        return
+    elif action == "clear_photos":
         cleanup(*session.photos)
         session.photos.clear()
     elif action == "clear_audio":
@@ -174,6 +191,10 @@ def _estimate_bytes(session, settings: dict) -> int:
             total_src += os.path.getsize(f)
         except OSError:
             pass
+    if session.intro or session.outro:
+        # normalized clips + the joined copy of the whole output
+        clip_dur = sum(float((i or {}).get("duration") or 0) for i in (session.intro_info, session.outro_info))
+        video_bytes += clip_dur * 3_000_000 / 8 + (audio_bytes + video_bytes)
     return int(audio_bytes + video_bytes + total_src * 0.5) + 50 * 1024 * 1024
 
 
@@ -190,7 +211,8 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
     engine = settings.get("engine", "lite")
     # protect everything this job touches from the storage sweeper
     state.register_job_files(uid, output, output + ".seg.mp4", output + ".audio.m4a",
-                             output + ".title.txt", output + ".wm.txt", *session.all_files())
+                             output + ".title.txt", output + ".wm.txt", output + ".main.mp4",
+                             *session.all_files())
 
     try:
         # ---- audio (merge if multiple)
@@ -290,6 +312,29 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
         if not os.path.exists(output) or os.path.getsize(output) < 1000:
             raise RenderError("Output file is empty.")
 
+        # ---- intro / outro: normalize the short clips, then stream-copy join (main video untouched)
+        if session.intro or session.outro:
+            main_only = output + ".main.mp4"
+            os.replace(output, main_only)
+            temps.append(main_only)
+            state.register_job_files(uid, main_only, output + ".intro.mp4", output + ".outro.mp4",
+                                     output + ".mainaac.mp4", output + ".concat.txt")
+            _, io_temps = await attach_intro_outro(
+                main_only, output,
+                intro=session.intro, intro_info=session.intro_info,
+                outro=session.outro, outro_info=session.outro_info,
+                fit="pad", on_stage=on_stage, on_progress=on_progress,
+                on_process=lambda p: state.register_process(uid, p),
+            )
+            temps.extend(io_temps)
+            if state.was_cancelled(uid):
+                raise RenderError("cancelled")
+            if not os.path.exists(output) or os.path.getsize(output) < 1000:
+                raise RenderError("Joined output file is empty.")
+            parts = (["intro"] if session.intro else []) + ["main"] + (["outro"] if session.outro else [])
+            extra_caption += " • " + "+".join(parts)
+            mode = mode + "+clips"
+
         render_time = time.time() - t0
         size = os.path.getsize(output)
         if size > Config.MAX_OUTPUT_SIZE_MB * 1024 * 1024:
@@ -364,7 +409,8 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
         state.unregister_process(uid)
         state.reset_cancel(uid)
         cleanup(output, thumb, merged, output + ".title.txt", output + ".wm.txt",
-                output + ".seg.mp4", output + ".audio.m4a", *temps)
+                output + ".seg.mp4", output + ".audio.m4a", output + ".main.mp4", output + ".intro.mp4",
+                output + ".outro.mp4", output + ".mainaac.mp4", output + ".concat.txt", *temps)
         state.release_job_files(uid)
         session.touch()
 

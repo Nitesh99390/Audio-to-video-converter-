@@ -10,12 +10,12 @@ import time
 import uuid
 
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, CallbackQuery
 
 from core.config import Config
 from core.database import db
 from core.helpers import gate, send_files_panel, get_settings
-from core.keyboards import settings_keyboard, advanced_keyboard
+from core.keyboards import settings_keyboard, advanced_keyboard, video_role_keyboard
 from core.state import state
 from core import storage
 from core.strings import NEED_MORE, STORAGE_FULL
@@ -188,7 +188,64 @@ async def _ingest_audio(client: Client, message: Message, media):
     await _after_upload(message, uid, kind="audio")
 
 
-# ================================================================ VIDEO (background)
+# ================================================================ VIDEO (intro / outro / background)
+ROLE_LABEL = {"intro": "🎬 Intro", "outro": "🏁 Outro", "bg": "🎥 Background loop"}
+
+
+def _auto_role(session) -> str:
+    """First video = intro, second = outro, then background loop. Long clips -> background."""
+    if not session.intro:
+        return "intro"
+    if not session.outro:
+        return "outro"
+    return "bg"
+
+
+def _set_role(session, role: str, path: str, info: dict):
+    """Put `path` into the given slot (dropping whatever was there)."""
+    if role == "intro":
+        if session.intro and session.intro != path:
+            cleanup(session.intro)
+        session.intro, session.intro_info = path, info
+    elif role == "outro":
+        if session.outro and session.outro != path:
+            cleanup(session.outro)
+        session.outro, session.outro_info = path, info
+    else:
+        # a background video replaces photos
+        cleanup(*session.photos)
+        session.photos.clear()
+        if session.bg_video and session.bg_video != path:
+            cleanup(session.bg_video)
+        session.bg_video = path
+    session.touch()
+
+
+def _take_role(session, role: str):
+    """Detach the file in `role` slot and return (path, info) without deleting it."""
+    if role == "intro":
+        p, i = session.intro, session.intro_info
+        session.intro, session.intro_info = None, {}
+    elif role == "outro":
+        p, i = session.outro, session.outro_info
+        session.outro, session.outro_info = None, {}
+    else:
+        p, i = session.bg_video, {}
+        session.bg_video = None
+    return p, i
+
+
+def _role_text(role: str, info: dict) -> str:
+    dur = format_duration(info.get("duration", 0))
+    res = f"{info.get('width', 0)}x{info.get('height', 0)}"
+    if role == "intro":
+        return f"🎬 **Intro set** ✅ ({res}, {dur})\nIt will play **before** the main video."
+    if role == "outro":
+        return f"🏁 **Outro set** ✅ ({res}, {dur})\nIt will play **after** the main video."
+    return (f"🎥 **Background video set** ✅ ({res}, {dur})\n"
+            "It will be looped for the whole video length; your audio replaces its sound.")
+
+
 @Client.on_message(filters.private & (filters.video | filters.animation))
 async def video_handler(client: Client, message: Message):
     if not await gate(client, message):
@@ -204,8 +261,8 @@ async def video_handler(client: Client, message: Message):
     session = state.get(uid)
     if not await _room_for(message, uid, media.file_size or 0):
         return
-    status = await message.reply_text("📥 Downloading background video...")
-    dest = _path(uid, "bgvideo", ".mp4")
+    status = await message.reply_text("📥 Downloading video...")
+    dest = _path(uid, "clip", ".mp4")
     try:
         path = await _download(message, dest, "📥 Downloading video", status)
     except Exception as e:
@@ -217,18 +274,75 @@ async def video_handler(client: Client, message: Message):
         cleanup(path)
         await status.edit_text("❌ Not a valid video.")
         return
-    # video replaces photos
-    cleanup(*session.photos)
-    session.photos.clear()
-    if session.bg_video:
-        cleanup(session.bg_video)
-    session.bg_video = path
-    session.touch()
-    await status.edit_text(
-        f"🎥 Background video set ✅ ({info['width']}x{info['height']}, {format_duration(info['duration'])}). "
-        "It will be looped for the whole video length."
-    )
-    await _after_upload(message, uid, kind="visual")
+
+    role = _auto_role(session)
+    long_clip = info["duration"] > Config.INTRO_OUTRO_AUTO_SEC
+    if role != "bg" and long_clip and not session.has_visual:
+        role = "bg"                       # a long video with no photo yet is almost surely a background loop
+    if role != "bg" and info["duration"] > Config.MAX_INTRO_OUTRO_SEC:
+        cleanup(path)
+        await status.edit_text(
+            f"⚠️ Intro/outro clips can be at most **{format_duration(Config.MAX_INTRO_OUTRO_SEC)}** long "
+            f"(this one is {format_duration(info['duration'])}).\n"
+            "Send a shorter clip, or send it after a photo is set if you want it as a background loop."
+        )
+        return
+    _set_role(session, role, path, info)
+    await status.edit_text(_role_text(role, info) + "\n\nWrong slot? Change it here 👇",
+                           reply_markup=video_role_keyboard(role))
+    await _after_upload(message, uid, kind="visual" if role == "bg" else "clip")
+
+
+@Client.on_callback_query(filters.regex(r"^vrole:(intro|outro|bg):(intro|outro|bg|remove)$"))
+async def video_role_cb(client: Client, cq: CallbackQuery):
+    uid = cq.from_user.id
+    cur, new = cq.matches[0].group(1), cq.matches[0].group(2)
+    session = state.get(uid)
+    if state.is_processing(uid):
+        await cq.answer("⏳ Wait for the running job to finish.", show_alert=True)
+        return
+    path, info = _take_role(session, cur)
+    if not path or not os.path.exists(path):
+        await cq.answer("This clip is no longer available.", show_alert=True)
+        try:
+            await cq.message.edit_reply_markup(None)
+        except Exception:
+            pass
+        return
+    if new == "remove":
+        cleanup(path)
+        session.touch()
+        await cq.answer("Removed")
+        try:
+            await cq.message.edit_text(f"🗑 {ROLE_LABEL[cur]} removed.")
+        except Exception:
+            pass
+        return
+    if new == cur:
+        _set_role(session, cur, path, info)
+        await cq.answer("Already set")
+        return
+    if not info:
+        info = await ffprobe(path)
+    if new != "bg" and info.get("duration", 0) > Config.MAX_INTRO_OUTRO_SEC:
+        _set_role(session, cur, path, info)
+        await cq.answer(f"Too long for an intro/outro (max {format_duration(Config.MAX_INTRO_OUTRO_SEC)}).",
+                        show_alert=True)
+        return
+    # swap: if the target slot is occupied, the old clip moves to the freed slot
+    other, other_info = _take_role(session, new)
+    _set_role(session, new, path, info)
+    if other and os.path.exists(other) and cur != "bg" and new != "bg":
+        _set_role(session, cur, other, other_info or await ffprobe(other))
+    elif other:
+        cleanup(other)
+    await cq.answer(f"Now used as {ROLE_LABEL[new]}")
+    try:
+        await cq.message.edit_text(_role_text(new, info) + "\n\nWrong slot? Change it here 👇",
+                                   reply_markup=video_role_keyboard(new))
+    except Exception:
+        pass
+    await send_files_panel(cq, uid)
 
 
 # ================================================================ DOCUMENT (route by type)
@@ -351,6 +465,14 @@ async def _after_upload(message: Message, uid: int, kind: str):
     session = state.get(uid)
     if session.ready:
         await send_files_panel(message, uid)
-    else:
-        need = "audio" if kind == "visual" else "visual"
-        await message.reply_text(NEED_MORE[need])
+        return
+    if kind == "clip":
+        if not session.has_visual and not session.has_audio:
+            await message.reply_text(NEED_MORE["both"])
+        elif not session.has_visual:
+            await message.reply_text(NEED_MORE["visual"])
+        else:
+            await message.reply_text(NEED_MORE["audio"])
+        return
+    need = "audio" if kind == "visual" else "visual"
+    await message.reply_text(NEED_MORE[need])
