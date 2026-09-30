@@ -14,14 +14,12 @@ from pyrogram.types import Message
 
 from core.config import Config
 from core.database import db
-from core.helpers import gate, send_files_panel
-from core.keyboards import cancel_keyboard, input_cancel_keyboard, settings_keyboard
+from core.helpers import gate, send_files_panel, get_settings
+from core.keyboards import settings_keyboard, advanced_keyboard
 from core.state import state
-from core.strings import NEED_MORE
-from core.utils import (
-    Throttle, progress_callback, ffprobe, extract_cover_art, cleanup,
-    humanbytes, format_duration,
-)
+from core import storage
+from core.strings import NEED_MORE, STORAGE_FULL
+from core.utils import Throttle, progress_callback, ffprobe, extract_cover_art, cleanup, format_duration
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +55,14 @@ def _size_ok(size: int) -> bool:
     return (size or 0) <= Config.MAX_FILE_SIZE_MB * 1024 * 1024
 
 
+async def _room_for(message: Message, uid: int, size: int) -> bool:
+    """Make sure the disk can take this upload; tell the user if not."""
+    if storage.ensure_space((size or 0) + 20 * 1024 * 1024, keep_user=uid):
+        return True
+    await message.reply_text(STORAGE_FULL)
+    return False
+
+
 # ================================================================ PHOTO
 @Client.on_message(filters.private & filters.photo)
 async def photo_handler(client: Client, message: Message):
@@ -72,6 +78,8 @@ async def photo_handler(client: Client, message: Message):
         session.bg_video = None
     if len(session.photos) >= Config.MAX_SLIDESHOW_IMAGES:
         await message.reply_text(f"⚠️ Max {Config.MAX_SLIDESHOW_IMAGES} photos allowed.")
+        return
+    if not await _room_for(message, uid, message.photo.file_size or 0):
         return
 
     dest = _path(uid, "photo", ".jpg")
@@ -130,6 +138,8 @@ async def _ingest_audio(client: Client, message: Message, media):
     elif message.voice:
         ext = ".ogg"
     dest = _path(uid, "audio", ext)
+    if not await _room_for(message, uid, media.file_size or 0):
+        return
 
     big = (media.file_size or 0) > 8 * 1024 * 1024
     status = await message.reply_text("📥 Downloading audio...") if big else None
@@ -192,6 +202,8 @@ async def video_handler(client: Client, message: Message):
         await message.reply_text("⏳ A video is being rendered right now.")
         return
     session = state.get(uid)
+    if not await _room_for(message, uid, media.file_size or 0):
+        return
     status = await message.reply_text("📥 Downloading background video...")
     dest = _path(uid, "bgvideo", ".mp4")
     try:
@@ -240,6 +252,8 @@ async def document_handler(client: Client, message: Message):
         if len(session.photos) >= Config.MAX_SLIDESHOW_IMAGES:
             await message.reply_text(f"⚠️ Max {Config.MAX_SLIDESHOW_IMAGES} photos allowed.")
             return
+        if not await _room_for(message, uid, doc.file_size or 0):
+            return
         dest = _path(uid, "photo", ext or ".jpg")
         try:
             path = await _download(message, dest, "Photo")
@@ -273,7 +287,8 @@ async def document_handler(client: Client, message: Message):
 @Client.on_message(filters.private & filters.text & ~filters.command(
     ["start", "help", "settings", "quick", "presets", "files", "convert", "cancel", "clear", "stats",
      "history", "about", "ping", "admin", "broadcast", "ban", "unban", "premium", "users", "server", "preset",
-     "duration", "request", "myaccess", "approve", "reject", "revoke", "extend", "pending", "approved", "access"]
+     "duration", "request", "myaccess", "approve", "reject", "revoke", "extend", "pending", "approved", "access",
+     "storage", "cleanup"]
 ), group=1)
 async def text_input_handler(client: Client, message: Message):
     uid = message.from_user.id
@@ -294,7 +309,7 @@ async def text_input_handler(client: Client, message: Message):
         name = value[:30]
         settings = await db.get_settings(uid)
         await db.save_preset(uid, name, settings)
-        await message.reply_text(f"💾 Preset **{name}** saved! Load it from 🎛 Presets.")
+        await message.reply_text(f"💾 Preset **{name}** saved. Load it from Settings → 🎛 Presets.")
         return
 
     if key == "target_duration":
@@ -306,9 +321,10 @@ async def text_input_handler(client: Client, message: Message):
             await message.reply_text("❌ Could not parse that. Examples: `10h`, `2h30m`, `90m`, `1:30:00`, `0`")
             return
         secs = min(secs, Config.MAX_OUTPUT_DURATION_SEC)
-        settings = await db.update_setting(uid, key, int(secs))
-        await message.reply_text(f"✅ Final length set to **{duration_label(int(secs))}**",
-                                 reply_markup=settings_keyboard(settings))
+        await db.update_setting(uid, key, int(secs))
+        settings = await get_settings(uid)
+        await message.reply_text(f"✅ Final length: **{duration_label(int(secs))}**",
+                                 reply_markup=settings_keyboard(settings, uid))
         if session.awaiting_msg_id:
             try:
                 await client.delete_messages(uid, session.awaiting_msg_id)
@@ -317,10 +333,11 @@ async def text_input_handler(client: Client, message: Message):
             session.awaiting_msg_id = None
         return
 
-    settings = await db.update_setting(uid, key, value)
+    await db.update_setting(uid, key, value)
+    settings = await get_settings(uid)
     labels = {"watermark_text": "💧 Watermark", "title_text": "🔤 Title", "custom_caption": "📝 Caption"}
-    await message.reply_text(f"✅ {labels.get(key, key)} set: `{value}`",
-                             reply_markup=settings_keyboard(settings))
+    await message.reply_text(f"✅ {labels.get(key, key)}: `{value}`",
+                             reply_markup=advanced_keyboard(settings))
     if session.awaiting_msg_id:
         try:
             await client.delete_messages(uid, session.awaiting_msg_id)

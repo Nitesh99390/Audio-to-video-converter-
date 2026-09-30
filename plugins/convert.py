@@ -15,13 +15,16 @@ from core.config import Config
 from core.database import db
 from core.engine import RenderPlan, build_command, render, merge_audios, RenderError
 from core.lite_engine import render_lite
-from core.helpers import gate, gate_cb, is_admin, send_files_panel
+from core.helpers import gate, gate_cb, is_admin, send_files_panel, get_settings
 from core.keyboards import cancel_keyboard, after_video_keyboard
+from core.lite_engine import LITE_AUDIO_BITRATE
+from core.policy import apply_policy
 from core.state import state
-from core.strings import NO_FILES, BUSY, DAILY_LIMIT
+from core import storage
+from core.strings import NO_FILES, BUSY, DAILY_LIMIT, STORAGE_FULL
 from core.utils import (
     ffprobe, make_thumbnail, cleanup, humanbytes, format_duration, format_time,
-    progress_bar_str, Throttle, progress_callback, safe_filename, disk_free,
+    progress_bar_str, Throttle, progress_callback, safe_filename,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,11 +129,14 @@ async def start_conversion(client: Client, message: Message, uid: int, from_cq: 
         if await db.today_usage(uid) >= Config.DAILY_LIMIT_FREE:
             await message.reply_text(DAILY_LIMIT.format(limit=Config.DAILY_LIMIT_FREE))
             return
-    if disk_free(Config.DOWNLOAD_DIR) < 500 * 1024 * 1024:
-        await message.reply_text("⚠️ Server storage is low. Please try again later.")
+    settings = await get_settings(uid)
+
+    # ---- disk guard: estimate the output size and make room for it first
+    need = _estimate_bytes(session, settings)
+    if not storage.ensure_space(need, keep_user=uid):
+        await message.reply_text(STORAGE_FULL)
         return
 
-    settings = await db.get_settings(uid)
     state.reset_cancel(uid)
 
     waiting = state.semaphore.locked()
@@ -146,6 +152,31 @@ async def start_conversion(client: Client, message: Message, uid: int, from_cq: 
         await _run_job(client, uid, session, settings, status, message)
 
 
+def _estimate_bytes(session, settings: dict) -> int:
+    """Rough upper bound of the disk the job will need (output + temps)."""
+    info = session.audio_info or {}
+    audio_dur = float(info.get("duration") or 0)
+    target = float(int(settings.get("target_duration") or 0) or audio_dur or 3600)
+    mode = settings.get("audio_mode", "copy")
+    if mode == "copy":
+        bps = int(info.get("bitrate") or 192_000)
+    else:
+        bps = LITE_AUDIO_BITRATE.get(mode, 128) * 1000
+    audio_bytes = target * bps / 8
+    if settings.get("engine") == "pro":
+        video_bytes = target * 2_500_000 / 8          # ~2.5 Mbit/s h264 estimate
+        audio_bytes *= 2                              # looped audio temp file
+    else:
+        video_bytes = target * 60_000 / 8             # lite segment loop ≈ 60 kbit/s
+    total_src = 0
+    for f in session.all_files():
+        try:
+            total_src += os.path.getsize(f)
+        except OSError:
+            pass
+    return int(audio_bytes + video_bytes + total_src * 0.5) + 50 * 1024 * 1024
+
+
 async def _run_job(client: Client, uid: int, session, settings: dict, status: Message, origin: Message):
     task_id = uuid.uuid4().hex[:8]
     out_dir = Config.DOWNLOAD_DIR
@@ -155,7 +186,11 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
     temps = []
     t0 = time.time()
     state.register_process(uid, _Dummy())
+    settings, _ = apply_policy(uid, settings)      # never let a non-admin reach the Pro engine
     engine = settings.get("engine", "lite")
+    # protect everything this job touches from the storage sweeper
+    state.register_job_files(uid, output, output + ".seg.mp4", output + ".audio.m4a",
+                             output + ".title.txt", output + ".wm.txt", *session.all_files())
 
     try:
         # ---- audio (merge if multiple)
@@ -163,6 +198,7 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
         if len(session.audios) > 1:
             await status.edit_text(f"🎵 Merging {len(session.audios)} audio files...", reply_markup=cancel_keyboard())
             merged = os.path.join(out_dir, f"merged_{uid}_{task_id}.m4a")
+            state.register_job_files(uid, merged)
             audio = await merge_audios(session.audios, merged)
         info = await ffprobe(audio)
         audio_dur = info["duration"]
@@ -235,6 +271,7 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
                 await on_stage("🔁 Looping audio to target length...")
                 loop_audio = os.path.join(out_dir, f"loop_{uid}_{task_id}.m4a")
                 temps.append(loop_audio)
+                state.register_job_files(uid, loop_audio)
                 code = await _loop_audio(audio, loop_audio, target)
                 if code:
                     raise RenderError("Audio loop failed.")
@@ -264,6 +301,7 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
         thumb_mode = settings.get("thumbnail", "photo")
         if thumb_mode != "none":
             thumb = os.path.join(out_dir, f"thumb_{uid}_{task_id}.jpg")
+            state.register_job_files(uid, thumb)
             src = images[0] if (thumb_mode == "photo" and images) else output
             at = 0 if src != output else min(1.0, target / 2)
             thumb = await make_thumbnail(src, thumb, at=at)
@@ -299,6 +337,8 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
             pass
 
         await db.record_video(uid, mode, target, size, render_time, settings)
+        # output is on Telegram now — free the disk immediately, do not wait for `finally`
+        cleanup(output, thumb, merged, *temps)
 
         if Config.LOG_CHANNEL:
             try:
@@ -323,7 +363,9 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
     finally:
         state.unregister_process(uid)
         state.reset_cancel(uid)
-        cleanup(output, thumb, merged, output + ".title.txt", output + ".wm.txt", *temps)
+        cleanup(output, thumb, merged, output + ".title.txt", output + ".wm.txt",
+                output + ".seg.mp4", output + ".audio.m4a", *temps)
+        state.release_job_files(uid)
         session.touch()
 
 

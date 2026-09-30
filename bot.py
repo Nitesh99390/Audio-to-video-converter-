@@ -9,7 +9,6 @@ Run:  python bot.py
 Env:  API_ID, API_HASH, BOT_TOKEN  (+ optional OWNER_ID, ADMINS, LOG_CHANNEL, FORCE_SUB_CHANNEL ...)
 """
 import asyncio
-import logging
 import shutil
 import sys
 
@@ -18,8 +17,7 @@ from pyrogram.types import BotCommand, BotCommandScopeChat
 
 from core.config import Config, logger
 from core.database import db
-from core.state import state
-from core.utils import cleanup
+from core import storage
 
 Config.validate()
 
@@ -38,58 +36,53 @@ app = Client(
     sleep_threshold=30,
 )
 
+# Keep the "/" menu short: only what a user needs. Everything else is reachable from the keyboard.
 USER_COMMANDS = [
-    BotCommand("start", "🚀 Start / Home"),
-    BotCommand("convert", "🎬 Convert uploaded files"),
-    BotCommand("duration", "⏱ Final video length (1h / 5h / 10h...)"),
-    BotCommand("request", "🔑 Request access"),
-    BotCommand("myaccess", "🔑 My access status"),
-    BotCommand("settings", "⚙️ Output settings"),
-    BotCommand("quick", "⚡ Quick modes (YouTube, Reels...)"),
-    BotCommand("presets", "🎛 Saved presets"),
-    BotCommand("files", "📂 Show uploaded files"),
-    BotCommand("clear", "🗑 Clear uploaded files"),
-    BotCommand("cancel", "❌ Cancel running job"),
-    BotCommand("stats", "📊 Your stats"),
-    BotCommand("history", "🕘 Last videos"),
-    BotCommand("help", "❓ Help & guide"),
-    BotCommand("about", "ℹ️ About the bot"),
+    BotCommand("start", "Home"),
+    BotCommand("convert", "Convert the uploaded files"),
+    BotCommand("duration", "Final video length, e.g. /duration 10h"),
+    BotCommand("settings", "Output settings"),
+    BotCommand("files", "Show / remove uploaded files"),
+    BotCommand("cancel", "Cancel the running job"),
+    BotCommand("myaccess", "Access status / request access"),
+    BotCommand("help", "Guide & commands"),
 ]
 ADMIN_COMMANDS = USER_COMMANDS + [
-    BotCommand("admin", "👑 Admin panel"),
-    BotCommand("pending", "⏳ Pending access requests"),
-    BotCommand("approved", "✅ Approved users"),
-    BotCommand("approve", "✅ Approve user: /approve <id> [10h]"),
-    BotCommand("extend", "➕ Extend access: /extend <id> <5h>"),
-    BotCommand("revoke", "🔒 Revoke access"),
-    BotCommand("access", "🔑 Manage a user's access"),
-    BotCommand("broadcast", "📢 Broadcast (reply to msg)"),
-    BotCommand("users", "👥 Global stats"),
-    BotCommand("server", "🖥 Server info"),
-    BotCommand("ban", "🚫 Ban user"),
-    BotCommand("unban", "✅ Unban user"),
-    BotCommand("premium", "⭐ Toggle premium"),
+    BotCommand("admin", "Admin panel"),
+    BotCommand("pending", "Pending access requests"),
+    BotCommand("approved", "Approved users"),
+    BotCommand("approve", "/approve <id> [10h|3d|permanent]"),
+    BotCommand("extend", "/extend <id> <5h>"),
+    BotCommand("revoke", "/revoke <id>"),
+    BotCommand("broadcast", "Broadcast (reply to a message)"),
+    BotCommand("storage", "Disk usage & auto-clean status"),
+    BotCommand("cleanup", "Delete all idle files now"),
+    BotCommand("server", "Server info"),
+    BotCommand("ban", "/ban <id> [reason]"),
+    BotCommand("unban", "/unban <id>"),
 ]
 
 
 async def maintenance_loop():
-    """Every 15 min: drop stale sessions (1h idle) and orphan files."""
-    from plugins.admin import cleanup_downloads
+    """
+    Disk watchdog. Runs every CLEANUP_INTERVAL_SEC:
+      * deletes orphan / temp files and idle uploads (SESSION_TTL_SEC)
+      * enforces the work-folder quota (MAX_STORAGE_MB)
+      * if free disk falls under MIN_FREE_MB, evicts everything not owned by a running job
+    """
     while True:
-        await asyncio.sleep(900)
+        await asyncio.sleep(Config.CLEANUP_INTERVAL_SEC)
         try:
-            for uid in state.stale_sessions(3600):
-                if not state.is_processing(uid):
-                    old = state.clear(uid)
-                    cleanup(*old.all_files())
-            n, freed = cleanup_downloads(max_age=7200)
-            if n:
-                logger.info("Maintenance: removed %d orphan files", n)
+            storage.sweep()
+            if storage.disk_free() < storage.reserve_bytes():
+                storage.emergency_evict()
         except Exception as e:
             logger.warning("Maintenance error: %s", e)
 
 
 async def main():
+    # a previous run (crash / notebook restart) may have left gigabytes behind
+    storage.purge_all()
     await db.connect()
     await app.start()
     me = await app.get_me()
@@ -108,18 +101,22 @@ async def main():
     from plugins.access import expiry_watcher
     asyncio.create_task(expiry_watcher(app))
 
-    logger.info("✅ %s is online as @%s | owner=%s | admins=%s | approval=%s | max_jobs=%d",
+    logger.info("✅ %s is online as @%s | owner=%s | admins=%s | approval=%s | pro=%s | max_jobs=%d | "
+                "storage quota=%dMB min_free=%dMB",
                 Config.BOT_NAME, me.username, Config.OWNER_ID, sorted(Config.ADMINS) or "-",
-                "ON" if Config.ACCESS_REQUIRED else "OFF", Config.MAX_CONCURRENT_TASKS)
+                "ON" if Config.ACCESS_REQUIRED else "OFF",
+                "admins only" if Config.PRO_ENGINE_ADMIN_ONLY else "everyone",
+                Config.MAX_CONCURRENT_TASKS, Config.MAX_STORAGE_MB, Config.MIN_FREE_MB)
     if Config.OWNER_ID:
         try:
             c = await db.access_counts()
             await app.send_message(
                 Config.OWNER_ID,
                 f"🟢 **{Config.BOT_NAME}** is online as @{me.username}\n"
-                f"🔐 Approval system: {'ON' if Config.ACCESS_REQUIRED else 'OFF'} • "
-                f"⏳ pending: {c['pending']} • ✅ approved: {c['approved']}\n\n"
-                "You will receive every access request here with one-tap duration buttons.",
+                f"🔐 Approval: {'ON' if Config.ACCESS_REQUIRED else 'OFF'} · ⏳ {c['pending']} pending · ✅ {c['approved']} approved\n"
+                f"🎬 Pro engine: {'admins only' if Config.PRO_ENGINE_ADMIN_ONLY else 'everyone'}\n"
+                f"🗄 Disk free: {storage.disk_free() // (1024 * 1024)} MB · auto-clean every "
+                f"{Config.CLEANUP_INTERVAL_SEC // 60} min",
             )
         except Exception as e:
             logger.warning("Owner %s unreachable (they must /start the bot once): %s", Config.OWNER_ID, e)
@@ -134,6 +131,7 @@ async def main():
     logger.info("Shutting down...")
     await app.stop()
     await db.close()
+    storage.purge_all()
 
 
 if __name__ == "__main__":

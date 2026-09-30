@@ -122,23 +122,24 @@ async def request_cb(client: Client, cq: CallbackQuery):
     await send_request(client, cq.from_user, cq=cq)
 
 
-async def send_access_status(message: Message, uid: int):
+async def access_status_text(uid: int) -> str:
     if is_admin(uid):
-        await message.reply_text("👑 **Admin** — unlimited access.")
-        return
+        return "👑 **Admin** — unlimited access, Lite + Pro engine."
     a = await db.get_access(uid)
     left = await db.access_remaining(uid)
     if left is not None:
-        status = "✅ Approved"
-        await message.reply_text(ACCESS_STATUS.format(status=status, left=fmt_left(left),
-                                                      expires=fmt_expiry(a["expires_at"])))
-        return
+        return ACCESS_STATUS.format(status="✅ Approved", left=fmt_left(left), expires=fmt_expiry(a["expires_at"]))
     if a and a["status"] == "pending":
-        await message.reply_text(ACCESS_PENDING)
-    elif a and a["status"] == "approved":
-        await message.reply_text(ACCESS_EXPIRED, reply_markup=request_access_keyboard())
-    else:
-        await message.reply_text(ACCESS_REQUIRED, reply_markup=request_access_keyboard())
+        return ACCESS_PENDING
+    if a and a["status"] == "approved":
+        return ACCESS_EXPIRED
+    return ACCESS_REQUIRED
+
+
+async def send_access_status(message: Message, uid: int):
+    text = await access_status_text(uid)
+    needs_request = text in (ACCESS_EXPIRED, ACCESS_REQUIRED)
+    await message.reply_text(text, reply_markup=request_access_keyboard() if needs_request else None)
 
 
 @Client.on_message(filters.command("myaccess") & filters.private)
@@ -266,6 +267,19 @@ async def manage_cb(client: Client, cq: CallbackQuery):
             f"⏱ Left: {fmt_left(left)}\n📅 Expires: {fmt_expiry(a['expires_at']) if a else '—'}")
     try:
         await cq.message.edit_text(text, reply_markup=manage_user_keyboard(uid))
+    except Exception:
+        pass
+    await cq.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^approvemore:(\d+):([01])$"))
+async def approvemore_cb(client: Client, cq: CallbackQuery):
+    if not is_admin(cq.from_user.id):
+        await cq.answer("⛔ Admins only", show_alert=True)
+        return
+    uid, expanded = int(cq.matches[0].group(1)), cq.matches[0].group(2) == "1"
+    try:
+        await cq.message.edit_reply_markup(approve_keyboard(uid, expanded=expanded))
     except Exception:
         pass
     await cq.answer()

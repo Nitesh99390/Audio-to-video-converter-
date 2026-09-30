@@ -16,7 +16,8 @@ from core.database import db
 from core.helpers import is_admin, uptime_str
 from core.keyboards import admin_keyboard, approved_list_keyboard, pending_list_keyboard
 from core.state import state
-from core.utils import humanbytes, format_time, cleanup
+from core import storage
+from core.utils import humanbytes, format_time
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ admin_filter = filters.create(lambda _, __, m: bool(m.from_user and is_admin(m.f
 @Client.on_message(filters.command("admin") & admin_filter)
 async def admin_cmd(client: Client, message: Message):
     c = await db.access_counts()
-    await message.reply_text("👑 **Admin panel**", reply_markup=admin_keyboard(c["pending"], c["approved"]))
+    await message.reply_text("👑 **Admin**", reply_markup=admin_keyboard(c["pending"], c["approved"]))
 
 
 async def stats_text() -> str:
@@ -66,30 +67,13 @@ def server_text() -> str:
     dl_size = sum(os.path.getsize(f) for f in dl_files if os.path.isfile(f))
     return (
         "🖥 **Server**\n\n"
-        f"🐧 {platform.system()} {platform.release()} • Python {platform.python_version()}\n"
-        f"🧠 CPU cores: {os.cpu_count()} • Load: {load_s}\n"
+        f"🐧 {platform.system()} {platform.release()} · Python {platform.python_version()}\n"
+        f"🧠 CPU: {os.cpu_count()} cores · load {load_s}\n"
         f"💾 RAM: {_mem_info()}\n"
-        f"📀 Disk: {humanbytes(du.used)} / {humanbytes(du.total)} (free {humanbytes(du.free)})\n"
-        f"📂 Downloads dir: {len(dl_files)} files, {humanbytes(dl_size)}\n"
-        f"🧵 FFmpeg threads: {Config.FFMPEG_THREADS or 'auto'}"
+        f"📀 Disk: {humanbytes(du.used)} / {humanbytes(du.total)} · free **{humanbytes(du.free)}**\n"
+        f"📂 Work folder: {len(dl_files)} files · {humanbytes(dl_size)}\n"
+        f"🧵 Jobs: {state.active_tasks}/{Config.MAX_CONCURRENT_TASKS} · FFmpeg threads {Config.FFMPEG_THREADS or 'auto'}"
     )
-
-
-def cleanup_downloads(max_age: float = 3600):
-    """Remove files in downloads dir not referenced by any session and older than max_age."""
-    active = set()
-    for uid in list(state._sessions.keys()):
-        active.update(state.get(uid).all_files())
-    n = freed = 0
-    now = time.time()
-    for f in glob.glob(os.path.join(Config.DOWNLOAD_DIR, "*")):
-        if f in active or not os.path.isfile(f):
-            continue
-        if now - os.path.getmtime(f) > max_age:
-            freed += os.path.getsize(f)
-            cleanup(f)
-            n += 1
-    return n, freed
 
 
 @Client.on_callback_query(filters.regex(r"^admin:(\w+)$"))
@@ -98,7 +82,7 @@ async def admin_cb(client: Client, cq: CallbackQuery):
         await cq.answer("⛔ Admins only", show_alert=True)
         return
     action = cq.matches[0].group(1)
-    text = "👑 **Admin panel**"
+    text = "👑 **Admin**"
     if action == "pending":
         rows = await db.pending_requests()
         text = (f"⏳ **Pending requests: {len(rows)}**\n\nTap a user to see approval buttons."
@@ -127,6 +111,8 @@ async def admin_cb(client: Client, cq: CallbackQuery):
         text = await stats_text()
     elif action == "server":
         text = server_text()
+    elif action == "storage":
+        text = storage.report()
     elif action == "broadcast_help":
         text = ("📢 **Broadcast**\n\nReply to any message with `/broadcast` — it will be copied to all users.\n"
                 "`/broadcast -pin` also pins it.")
@@ -147,8 +133,9 @@ async def admin_cb(client: Client, cq: CallbackQuery):
                 "`/premium <id>` (toggle)\n`/users` — stats • `/server` — server info\n"
                 "`/broadcast` (reply to a message)")
     elif action == "cleanup":
-        n, freed = cleanup_downloads(max_age=0)
-        text = f"🧹 Cleaned **{n}** stale files, freed {humanbytes(freed)}."
+        r = storage.sweep(orphan_ttl=0, session_ttl=0)
+        text = (f"🧹 **Cleanup done**\n\n{r['files']} orphan files · {r['sessions']} idle uploads · "
+                f"freed **{humanbytes(r['freed'])}**\n\n" + storage.report())
     c = await db.access_counts()
     try:
         await cq.message.edit_text(text, reply_markup=admin_keyboard(c["pending"], c["approved"]))
@@ -166,6 +153,16 @@ async def users_cmd(client: Client, message: Message):
 @Client.on_message(filters.command("server") & admin_filter)
 async def server_cmd(client: Client, message: Message):
     await message.reply_text(server_text())
+
+
+@Client.on_message(filters.command(["storage", "cleanup"]) & admin_filter)
+async def storage_cmd(client: Client, message: Message):
+    if message.command[0] == "cleanup":
+        r = storage.sweep(orphan_ttl=0, session_ttl=0)
+        await message.reply_text(f"🧹 Freed **{humanbytes(r['freed'])}** "
+                                 f"({r['files']} files, {r['sessions']} idle uploads)\n\n" + storage.report())
+    else:
+        await message.reply_text(storage.report())
 
 
 def _target_id(message: Message):
