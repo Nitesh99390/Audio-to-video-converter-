@@ -1,181 +1,119 @@
-import os
+#!/usr/bin/env python3
+"""
+Advanced Audio → Video Telegram Bot
+===================================
+Entry point. Loads config, opens the database, registers bot commands,
+starts background maintenance and runs the Pyrogram client with plugins.
+
+Run:  python bot.py
+Env:  API_ID, API_HASH, BOT_TOKEN  (+ optional OWNER_ID, ADMINS, LOG_CHANNEL, FORCE_SUB_CHANNEL ...)
+"""
 import asyncio
 import logging
-import time
-import uuid
-from pyrogram import Client, filters
-from pyrogram.types import Message
+import shutil
+import sys
 
-# Logging setup
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+from pyrogram import Client, idle
+from pyrogram.types import BotCommand, BotCommandScopeChat
+
+from core.config import Config, logger
+from core.database import db
+from core.state import state
+from core.utils import cleanup
+
+Config.validate()
+
+if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+    logger.error("ffmpeg / ffprobe not found in PATH. Install ffmpeg first.")
+    sys.exit(1)
+
+app = Client(
+    Config.SESSION_NAME,
+    api_id=Config.API_ID,
+    api_hash=Config.API_HASH,
+    bot_token=Config.BOT_TOKEN,
+    plugins=dict(root="plugins"),
+    workers=16,
+    max_concurrent_transmissions=4,
+    sleep_threshold=30,
 )
-logger = logging.getLogger(__name__)
 
-# Kaggle Secrets Check
-try:
-    API_ID = int(os.environ.get("API_ID"))
-    API_HASH = os.environ.get("API_HASH")
-    BOT_TOKEN = os.environ.get("BOT_TOKEN")
-except TypeError:
-    logger.error("Kaggle Secrets (Env variables) set nahi hain!")
-    exit(1)
+USER_COMMANDS = [
+    BotCommand("start", "🚀 Start / Home"),
+    BotCommand("convert", "🎬 Convert uploaded files"),
+    BotCommand("settings", "⚙️ Output settings"),
+    BotCommand("quick", "⚡ Quick modes (YouTube, Reels...)"),
+    BotCommand("presets", "🎛 Saved presets"),
+    BotCommand("files", "📂 Show uploaded files"),
+    BotCommand("clear", "🗑 Clear uploaded files"),
+    BotCommand("cancel", "❌ Cancel running job"),
+    BotCommand("stats", "📊 Your stats"),
+    BotCommand("history", "🕘 Last videos"),
+    BotCommand("help", "❓ Help & guide"),
+    BotCommand("about", "ℹ️ About the bot"),
+]
+ADMIN_COMMANDS = USER_COMMANDS + [
+    BotCommand("admin", "👑 Admin panel"),
+    BotCommand("broadcast", "📢 Broadcast (reply to msg)"),
+    BotCommand("users", "👥 Global stats"),
+    BotCommand("server", "🖥 Server info"),
+    BotCommand("ban", "🚫 Ban user"),
+    BotCommand("unban", "✅ Unban user"),
+    BotCommand("premium", "⭐ Toggle premium"),
+]
 
-bot = Client(
-    "superfast_audio_video_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
-)
 
-user_data = {}
-
-# Advanced Progress Bar (Telegram flood limit se bachne ke liye)
-async def progress_bar(current, total, status_msg, action_text, start_time):
-    now = time.time()
-    if (now - start_time) > 3 or current == total:
+async def maintenance_loop():
+    """Every 15 min: drop stale sessions (1h idle) and orphan files."""
+    from plugins.admin import cleanup_downloads
+    while True:
+        await asyncio.sleep(900)
         try:
-            percent = round((current / total) * 100, 1)
-            await status_msg.edit_text(f"⏳ **{action_text}**\n🔄 Progress: {percent}%")
-        except Exception:
-            pass 
+            for uid in state.stale_sessions(3600):
+                if not state.is_processing(uid):
+                    old = state.clear(uid)
+                    cleanup(*old.all_files())
+            n, freed = cleanup_downloads(max_age=7200)
+            if n:
+                logger.info("Maintenance: removed %d orphan files", n)
+        except Exception as e:
+            logger.warning("Maintenance error: %s", e)
 
-@bot.on_message(filters.command("start"))
-async def start_handler(client, message: Message):
-    user_data[message.chat.id] = {}
-    await message.reply_text(
-        "🚀 **Superfast Video Maker Bot** me aapka swagat hai!\n\n"
-        "⚡️ Yeh bot bina quality loss ke seconds me video banata hai.\n\n"
-        "🛠 **Process:**\n"
-        "1️⃣ Pehle ek **Photo** bhejo.\n"
-        "2️⃣ Phir apna **Audio** file bhejo."
-    )
 
-@bot.on_message(filters.photo)
-async def photo_handler(client, message: Message):
-    chat_id = message.chat.id
-    if chat_id not in user_data:
-        user_data[chat_id] = {}
-    
-    status = await message.reply_text("📥 Photo download ho rahi hai...")
-    start_time = time.time()
-    
-    # Har photo ke liye unique ID taaki files mix na hon
-    task_id = str(uuid.uuid4())[:8]
-    file_path = f"downloads/photo_{chat_id}_{task_id}.jpg"
-    
+async def main():
+    await db.connect()
+    await app.start()
+    me = await app.get_me()
+
     try:
-        photo_path = await message.download(
-            file_name=file_path,
-            progress=progress_bar,
-            progress_args=(status, "Photo Downloading...", start_time)
-        )
-        user_data[chat_id]["photo"] = photo_path
-        
-        if "audio" in user_data[chat_id]:
-            await status.edit_text("✅ Photo mil gayi! Superfast Processing shuru...")
-            await process_video(client, chat_id, message)
-        else:
-            await status.edit_text("✅ Photo save ho gayi! 🎵 Ab apna **Audio** bhejo.")
+        await app.set_bot_commands(USER_COMMANDS)
+        for admin_id in Config.ADMINS:
+            try:
+                await app.set_bot_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin_id))
+            except Exception:
+                pass
     except Exception as e:
-        logger.error(f"Photo error: {e}")
-        await status.edit_text("❌ Photo download me error aaya.")
+        logger.warning("set_bot_commands: %s", e)
 
-@bot.on_message(filters.audio | filters.voice | filters.document)
-async def audio_handler(client, message: Message):
-    chat_id = message.chat.id
-    
-    if message.document and not message.document.mime_type.startswith("audio/"):
-        await message.reply_text("⚠️ Kripya sirf Audio file bhejein.")
-        return
-        
-    if chat_id not in user_data:
-        user_data[chat_id] = {}
-    
-    status = await message.reply_text("📥 Audio download ho raha hai...")
-    start_time = time.time()
-    
-    # Smart Audio Extension Extractor
-    ext = ".mp3"
-    if message.audio and message.audio.file_name:
-        ext = os.path.splitext(message.audio.file_name)[1]
-        
-    task_id = str(uuid.uuid4())[:8]
-    file_path = f"downloads/audio_{chat_id}_{task_id}{ext}"
-    
-    try:
-        audio_path = await message.download(
-            file_name=file_path,
-            progress=progress_bar,
-            progress_args=(status, "Audio Downloading...", start_time)
-        )
-        user_data[chat_id]["audio"] = audio_path
-        
-        if "photo" in user_data[chat_id]:
-            await status.edit_text("✅ Audio mil gaya! Superfast Processing shuru...")
-            await process_video(client, chat_id, message)
-        else:
-            await status.edit_text("✅ Audio save ho gaya! 🖼 Ab apni **Photo** bhejo.")
-    except Exception as e:
-        logger.error(f"Audio error: {e}")
-        await status.edit_text("❌ Audio download me error aaya.")
+    asyncio.create_task(maintenance_loop())
 
-async def process_video(client, chat_id, message):
-    photo = user_data[chat_id].get("photo")
-    audio = user_data[chat_id].get("audio")
-    
-    task_id = str(uuid.uuid4())[:8]
-    output_video = f"downloads/video_{chat_id}_{task_id}.mp4"
-    
-    status_msg = await message.reply_text("⚡️ **Superfast Rendering...**\nIsme lagbhag 5-10 seconds lagenge!")
-    
-    try:
-        # Ultra Fast FFmpeg command with Direct Copy
-        cmd = (
-            f'ffmpeg -y -loop 1 -framerate 1 -i "{photo}" -i "{audio}" '
-            f'-c:v libx264 -tune stillimage -preset ultrafast -c:a copy '
-            f'-shortest "{output_video}"'
-        )
-        
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await proc.communicate()
-        
-        if proc.returncode == 0 and os.path.exists(output_video):
-            await status_msg.edit_text("📤 Video seconds me ban gaya! Ab Upload ho raha hai...")
-            start_time = time.time()
-            
-            await client.send_video(
-                chat_id=chat_id,
-                video=output_video,
-                caption="🎬 Ye raha aapka Superfast Video!",
-                progress=progress_bar,
-                progress_args=(status_msg, "Uploading Video...", start_time)
-            )
-            await status_msg.delete()
-        else:
-            logger.error(f"FFmpeg Error: {stderr.decode()}")
-            await status_msg.edit_text("❌ Video nahi ban paya. Audio format copy ko support nahi kar raha hoga.")
-            
-    except Exception as e:
-        logger.error(f"Processing error: {e}")
-        await status_msg.edit_text("❌ Server error.")
-        
-    finally:
-        # Storage clean karna
-        for f in [photo, audio, output_video]:
-            if f and os.path.exists(f):
-                try:
-                    os.remove(f)
-                except:
-                    pass
-        user_data[chat_id] = {}
+    logger.info("✅ %s is online as @%s | admins=%s | max_jobs=%d",
+                Config.BOT_NAME, me.username, sorted(Config.ADMINS) or "-", Config.MAX_CONCURRENT_TASKS)
+    if Config.LOG_CHANNEL:
+        try:
+            await app.send_message(Config.LOG_CHANNEL, f"🟢 **{Config.BOT_NAME}** started as @{me.username}")
+        except Exception as e:
+            logger.warning("LOG_CHANNEL unreachable: %s", e)
+
+    await idle()
+
+    logger.info("Shutting down...")
+    await app.stop()
+    await db.close()
+
 
 if __name__ == "__main__":
-    os.makedirs("downloads", exist_ok=True)
-    logger.info("⚡️ Superfast Bot is starting...")
-    bot.run()
+    try:
+        app.run(main())
+    except KeyboardInterrupt:
+        pass
