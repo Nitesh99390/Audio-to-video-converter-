@@ -15,13 +15,18 @@ logger = logging.getLogger(__name__)
 
 # ----- Default settings for every new user -----
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    "resolution": "1080p",        # 480p / 720p / 1080p / 1440p / 2160p / original
+    # ---- engine ----
+    "engine": "lite",             # lite (ultra-fast loop engine) / pro (full FFmpeg render)
+    "target_duration": 0,         # 0 = same as audio, else seconds (audio is looped to fill)
+    # ---- video ----
+    "resolution": "720p",         # 480p / 720p / 1080p / 1440p / 2160p / original
     "aspect": "16:9",             # 16:9 / 9:16 / 1:1 / 4:3 / 4:5 / 21:9
     "fit": "blur",                # blur / crop / pad / stretch
-    "fps": 30,                    # 24 / 25 / 30 / 60
-    "quality": "high",            # low / medium / high / ultra
+    "fps": 10,                    # lite: 1-30 ; pro: 24 / 25 / 30 / 60
+    "quality": "medium",          # low / medium / high / ultra
     "codec": "h264",              # h264 / h265
-    "audio_mode": "copy",         # copy / aac128 / aac192 / aac320 / mp3
+    "audio_mode": "copy",         # copy / aac64 / aac96 / aac128 / aac192 / aac320 / mp3
+    # ---- pro-only extras ----
     "visualizer": "none",         # none / waves / bars / spectrum / vectorscope / cqt
     "vis_color": "white",         # white / cyan / magenta / yellow / red / green / rainbow
     "vis_position": "bottom",     # bottom / center / top
@@ -31,14 +36,15 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "watermark_position": "bottom_right",  # 5 positions
     "title_text": "",             # big title on video
     "title_position": "top",      # top / center / bottom
-    "spoiler": False,
-    "output_mode": "video",       # video (streamable) / document
     "slideshow_duration": 5,      # seconds per image
     "slideshow_transition": "fade",  # fade / none
+    # ---- output ----
+    "spoiler": False,
+    "output_mode": "video",       # video (streamable) / document
     "loop_bg_video": True,
     "custom_caption": "",
-    "thumbnail": "auto",          # auto / photo / none
-    "language": "hi",             # hi / en
+    "thumbnail": "photo",         # auto / photo / none
+    "language": "en",
 }
 
 CREATE_SQL = """
@@ -73,6 +79,16 @@ CREATE TABLE IF NOT EXISTS usage (
 CREATE TABLE IF NOT EXISTS stats (
     key TEXT PRIMARY KEY,
     value INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS access (
+    user_id INTEGER PRIMARY KEY,
+    status TEXT DEFAULT 'none',          -- none / pending / approved / rejected
+    expires_at REAL DEFAULT 0,           -- 0 = permanent (when approved)
+    granted_by INTEGER DEFAULT 0,
+    granted_at REAL DEFAULT 0,
+    requested_at REAL DEFAULT 0,
+    request_note TEXT DEFAULT '',
+    expiry_notified INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +221,126 @@ class Database:
     async def delete_preset(self, user_id: int, name: str) -> None:
         await self._db.execute("DELETE FROM presets WHERE user_id=? AND name=?", (user_id, name))
         await self._db.commit()
+
+    # ------------------------------------------------------- access control
+    async def get_access(self, user_id: int) -> Optional[dict]:
+        cur = await self._db.execute("SELECT * FROM access WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def has_access(self, user_id: int) -> bool:
+        """True if the user is approved and (permanent or not yet expired)."""
+        a = await self.get_access(user_id)
+        if not a or a["status"] != "approved":
+            return False
+        return a["expires_at"] == 0 or a["expires_at"] > time.time()
+
+    async def access_remaining(self, user_id: int) -> Optional[float]:
+        """Seconds left (None = no access, float('inf') = permanent)."""
+        a = await self.get_access(user_id)
+        if not a or a["status"] != "approved":
+            return None
+        if a["expires_at"] == 0:
+            return float("inf")
+        left = a["expires_at"] - time.time()
+        return left if left > 0 else None
+
+    async def request_access(self, user_id: int, note: str = "") -> None:
+        await self._db.execute(
+            "INSERT INTO access (user_id, status, requested_at, request_note, expiry_notified) "
+            "VALUES (?, 'pending', ?, ?, 0) "
+            "ON CONFLICT(user_id) DO UPDATE SET status='pending', requested_at=excluded.requested_at, "
+            "request_note=excluded.request_note, expiry_notified=0",
+            (user_id, time.time(), note[:200]),
+        )
+        await self._db.commit()
+
+    async def grant_access(self, user_id: int, seconds: float, granted_by: int) -> float:
+        """Approve a user for `seconds` (0 = permanent). Returns expires_at."""
+        expires = 0.0 if seconds <= 0 else time.time() + seconds
+        await self._db.execute(
+            "INSERT INTO access (user_id, status, expires_at, granted_by, granted_at, expiry_notified) "
+            "VALUES (?, 'approved', ?, ?, ?, 0) "
+            "ON CONFLICT(user_id) DO UPDATE SET status='approved', expires_at=excluded.expires_at, "
+            "granted_by=excluded.granted_by, granted_at=excluded.granted_at, expiry_notified=0",
+            (user_id, expires, granted_by, time.time()),
+        )
+        await self._db.commit()
+        return expires
+
+    async def extend_access(self, user_id: int, seconds: float, granted_by: int) -> float:
+        """Add time on top of the current expiry (or from now if expired)."""
+        a = await self.get_access(user_id)
+        base = time.time()
+        if a and a["status"] == "approved":
+            if a["expires_at"] == 0:
+                return 0.0
+            base = max(base, a["expires_at"])
+        expires = base + seconds
+        await self._db.execute(
+            "INSERT INTO access (user_id, status, expires_at, granted_by, granted_at, expiry_notified) "
+            "VALUES (?, 'approved', ?, ?, ?, 0) "
+            "ON CONFLICT(user_id) DO UPDATE SET status='approved', expires_at=excluded.expires_at, "
+            "granted_by=excluded.granted_by, granted_at=excluded.granted_at, expiry_notified=0",
+            (user_id, expires, granted_by, time.time()),
+        )
+        await self._db.commit()
+        return expires
+
+    async def reject_access(self, user_id: int) -> None:
+        await self._db.execute(
+            "INSERT INTO access (user_id, status, requested_at) VALUES (?, 'rejected', ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET status='rejected'",
+            (user_id, time.time()),
+        )
+        await self._db.commit()
+
+    async def revoke_access(self, user_id: int) -> None:
+        await self._db.execute(
+            "UPDATE access SET status='none', expires_at=0, expiry_notified=1 WHERE user_id=?", (user_id,)
+        )
+        await self._db.commit()
+
+    async def pending_requests(self, limit: int = 30) -> List[dict]:
+        cur = await self._db.execute(
+            "SELECT a.*, u.first_name, u.username FROM access a LEFT JOIN users u ON u.user_id=a.user_id "
+            "WHERE a.status='pending' ORDER BY a.requested_at ASC LIMIT ?", (limit,)
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def approved_users(self, limit: int = 50) -> List[dict]:
+        now = time.time()
+        cur = await self._db.execute(
+            "SELECT a.*, u.first_name, u.username FROM access a LEFT JOIN users u ON u.user_id=a.user_id "
+            "WHERE a.status='approved' AND (a.expires_at=0 OR a.expires_at>?) "
+            "ORDER BY a.expires_at=0 DESC, a.expires_at ASC LIMIT ?", (now, limit)
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def newly_expired(self) -> List[int]:
+        """Approved users whose time ran out and who were not yet notified; marks them notified."""
+        now = time.time()
+        cur = await self._db.execute(
+            "SELECT user_id FROM access WHERE status='approved' AND expires_at>0 AND expires_at<=? "
+            "AND expiry_notified=0", (now,)
+        )
+        ids = [r[0] for r in await cur.fetchall()]
+        if ids:
+            await self._db.execute(
+                f"UPDATE access SET expiry_notified=1 WHERE user_id IN ({','.join('?' * len(ids))})", ids
+            )
+            await self._db.commit()
+        return ids
+
+    async def access_counts(self) -> Dict[str, int]:
+        now = time.time()
+        out = {}
+        cur = await self._db.execute("SELECT COUNT(*) FROM access WHERE status='pending'")
+        out["pending"] = (await cur.fetchone())[0]
+        cur = await self._db.execute(
+            "SELECT COUNT(*) FROM access WHERE status='approved' AND (expires_at=0 OR expires_at>?)", (now,))
+        out["approved"] = (await cur.fetchone())[0]
+        return out
 
     # ------------------------------------------------------- usage/stats
     async def today_usage(self, user_id: int) -> int:

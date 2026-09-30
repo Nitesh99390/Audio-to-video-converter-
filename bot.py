@@ -41,6 +41,9 @@ app = Client(
 USER_COMMANDS = [
     BotCommand("start", "🚀 Start / Home"),
     BotCommand("convert", "🎬 Convert uploaded files"),
+    BotCommand("duration", "⏱ Final video length (1h / 5h / 10h...)"),
+    BotCommand("request", "🔑 Request access"),
+    BotCommand("myaccess", "🔑 My access status"),
     BotCommand("settings", "⚙️ Output settings"),
     BotCommand("quick", "⚡ Quick modes (YouTube, Reels...)"),
     BotCommand("presets", "🎛 Saved presets"),
@@ -54,6 +57,12 @@ USER_COMMANDS = [
 ]
 ADMIN_COMMANDS = USER_COMMANDS + [
     BotCommand("admin", "👑 Admin panel"),
+    BotCommand("pending", "⏳ Pending access requests"),
+    BotCommand("approved", "✅ Approved users"),
+    BotCommand("approve", "✅ Approve user: /approve <id> [10h]"),
+    BotCommand("extend", "➕ Extend access: /extend <id> <5h>"),
+    BotCommand("revoke", "🔒 Revoke access"),
+    BotCommand("access", "🔑 Manage a user's access"),
     BotCommand("broadcast", "📢 Broadcast (reply to msg)"),
     BotCommand("users", "👥 Global stats"),
     BotCommand("server", "🖥 Server info"),
@@ -96,9 +105,24 @@ async def main():
         logger.warning("set_bot_commands: %s", e)
 
     asyncio.create_task(maintenance_loop())
+    from plugins.access import expiry_watcher
+    asyncio.create_task(expiry_watcher(app))
 
-    logger.info("✅ %s is online as @%s | admins=%s | max_jobs=%d",
-                Config.BOT_NAME, me.username, sorted(Config.ADMINS) or "-", Config.MAX_CONCURRENT_TASKS)
+    logger.info("✅ %s is online as @%s | owner=%s | admins=%s | approval=%s | max_jobs=%d",
+                Config.BOT_NAME, me.username, Config.OWNER_ID, sorted(Config.ADMINS) or "-",
+                "ON" if Config.ACCESS_REQUIRED else "OFF", Config.MAX_CONCURRENT_TASKS)
+    if Config.OWNER_ID:
+        try:
+            c = await db.access_counts()
+            await app.send_message(
+                Config.OWNER_ID,
+                f"🟢 **{Config.BOT_NAME}** is online as @{me.username}\n"
+                f"🔐 Approval system: {'ON' if Config.ACCESS_REQUIRED else 'OFF'} • "
+                f"⏳ pending: {c['pending']} • ✅ approved: {c['approved']}\n\n"
+                "You will receive every access request here with one-tap duration buttons.",
+            )
+        except Exception as e:
+            logger.warning("Owner %s unreachable (they must /start the bot once): %s", Config.OWNER_ID, e)
     if Config.LOG_CHANNEL:
         try:
             await app.send_message(Config.LOG_CHANNEL, f"🟢 **{Config.BOT_NAME}** started as @{me.username}")

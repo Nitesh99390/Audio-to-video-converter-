@@ -64,7 +64,7 @@ async def photo_handler(client: Client, message: Message):
         return
     uid = message.from_user.id
     if state.is_processing(uid):
-        await message.reply_text("⏳ Abhi ek video ban raha hai. Complete hone ke baad naya bhejo.")
+        await message.reply_text("⏳ A video is being rendered right now. Send new files after it finishes.")
         return
     session = state.get(uid)
     if session.bg_video:
@@ -81,7 +81,7 @@ async def photo_handler(client: Client, message: Message):
         session.touch()
     except Exception as e:
         logger.error("photo download: %s", e)
-        await message.reply_text("❌ Photo download fail ho gayi.")
+        await message.reply_text("❌ Photo download failed.")
         return
 
     # album: debounce so we reply once after the last photo arrives
@@ -95,7 +95,7 @@ async def photo_handler(client: Client, message: Message):
             await asyncio.sleep(2.0)
             _album_buffer.pop(gid, None)
             n = len(state.get(uid).photos)
-            await message.reply_text(f"🎞 **{n} photos** add ho gayi → Slideshow mode ✅")
+            await message.reply_text(f"🎞 **{n} photos** added → Slideshow mode ✅")
             await _after_upload(message, uid, kind="visual")
 
         _album_buffer[gid] = asyncio.create_task(_delayed())
@@ -119,7 +119,7 @@ async def audio_handler(client: Client, message: Message):
 async def _ingest_audio(client: Client, message: Message, media):
     uid = message.from_user.id
     if state.is_processing(uid):
-        await message.reply_text("⏳ Abhi ek video ban raha hai. Complete hone ke baad naya bhejo.")
+        await message.reply_text("⏳ A video is being rendered right now. Send new files after it finishes.")
         return
     session = state.get(uid)
 
@@ -132,24 +132,24 @@ async def _ingest_audio(client: Client, message: Message, media):
     dest = _path(uid, "audio", ext)
 
     big = (media.file_size or 0) > 8 * 1024 * 1024
-    status = await message.reply_text("📥 Audio download ho raha hai...") if big else None
+    status = await message.reply_text("📥 Downloading audio...") if big else None
     try:
         path = await _download(message, dest, "📥 Downloading audio", status)
     except Exception as e:
         logger.error("audio download: %s", e)
         if status:
-            await status.edit_text("❌ Audio download fail ho gaya.")
+            await status.edit_text("❌ Audio download failed.")
         return
 
     info = await ffprobe(path)
     if not info["has_audio"]:
         cleanup(path)
-        msg = "❌ Is file me audio stream nahi mila."
+        msg = "❌ No audio stream found in this file."
         await (status.edit_text(msg) if status else message.reply_text(msg))
         return
     if info["duration"] > Config.MAX_AUDIO_DURATION_SEC:
         cleanup(path)
-        msg = f"⚠️ Audio bahut lamba hai. Max {format_duration(Config.MAX_AUDIO_DURATION_SEC)}."
+        msg = f"⚠️ Audio is too long. Max {format_duration(Config.MAX_AUDIO_DURATION_SEC)}."
         await (status.edit_text(msg) if status else message.reply_text(msg))
         return
 
@@ -166,10 +166,10 @@ async def _ingest_audio(client: Client, message: Message, media):
         if cover:
             session.photos.append(cover)
             if status:
-                await status.edit_text("🎨 Album art mil gaya — photo ke roop me use hoga.")
+                await status.edit_text("🎨 Found embedded album art — it will be used as the picture.")
             else:
-                await message.reply_text("🎨 Audio me embedded album-art mila — photo ke roop me use karunga. "
-                                         "Chaaho to dusri photo bhej do.")
+                await message.reply_text("🎨 Found embedded album art — I will use it as the picture. "
+                                         "Send another photo if you prefer.")
     if status:
         try:
             await status.delete()
@@ -189,21 +189,21 @@ async def video_handler(client: Client, message: Message):
         await message.reply_text(f"⚠️ File too big. Max {Config.MAX_FILE_SIZE_MB} MB.")
         return
     if state.is_processing(uid):
-        await message.reply_text("⏳ Abhi ek video ban raha hai.")
+        await message.reply_text("⏳ A video is being rendered right now.")
         return
     session = state.get(uid)
-    status = await message.reply_text("📥 Background video download ho raha hai...")
+    status = await message.reply_text("📥 Downloading background video...")
     dest = _path(uid, "bgvideo", ".mp4")
     try:
         path = await _download(message, dest, "📥 Downloading video", status)
     except Exception as e:
         logger.error("video download: %s", e)
-        await status.edit_text("❌ Video download fail ho gaya.")
+        await status.edit_text("❌ Video download failed.")
         return
     info = await ffprobe(path)
     if not info["has_video"]:
         cleanup(path)
-        await status.edit_text("❌ Valid video nahi hai.")
+        await status.edit_text("❌ Not a valid video.")
         return
     # video replaces photos
     cleanup(*session.photos)
@@ -214,7 +214,7 @@ async def video_handler(client: Client, message: Message):
     session.touch()
     await status.edit_text(
         f"🎥 Background video set ✅ ({info['width']}x{info['height']}, {format_duration(info['duration'])}). "
-        "Yeh audio ki length tak loop hoga."
+        "It will be looped for the whole video length."
     )
     await _after_upload(message, uid, kind="visual")
 
@@ -244,19 +244,19 @@ async def document_handler(client: Client, message: Message):
         try:
             path = await _download(message, dest, "Photo")
         except Exception:
-            await message.reply_text("❌ Image download fail.")
+            await message.reply_text("❌ Image download failed.")
             return
         info = await ffprobe(path)
         if not info["has_video"]:
             cleanup(path)
-            await message.reply_text("❌ Valid image nahi hai.")
+            await message.reply_text("❌ Not a valid image.")
             return
         if session.bg_video:
             cleanup(session.bg_video)
             session.bg_video = None
         session.photos.append(path)
         session.touch()
-        await message.reply_text("🖼 HD image (document) add ho gayi ✅ — full quality preserve hogi.")
+        await message.reply_text("🖼 HD image (document) added ✅ — full quality preserved.")
         await _after_upload(message, uid, kind="visual")
     elif mime.startswith("video/") or ext in VIDEO_EXT:
         # treat as background video
@@ -264,7 +264,7 @@ async def document_handler(client: Client, message: Message):
         await video_handler(client, message)
     else:
         await message.reply_text(
-            "⚠️ Yeh file type support nahi hai.\n\nSupported: 🎵 audio (mp3/m4a/wav/flac/ogg...), "
+            "⚠️ This file type is not supported.\n\nSupported: 🎵 audio (mp3/m4a/wav/flac/ogg...), "
             "🖼 image (jpg/png/webp), 🎥 video (mp4/mkv/mov/webm)."
         )
 
@@ -272,7 +272,8 @@ async def document_handler(client: Client, message: Message):
 # ================================================================ TEXT INPUT (settings that need typing)
 @Client.on_message(filters.private & filters.text & ~filters.command(
     ["start", "help", "settings", "quick", "presets", "files", "convert", "cancel", "clear", "stats",
-     "history", "about", "ping", "admin", "broadcast", "ban", "unban", "premium", "users", "server", "preset"]
+     "history", "about", "ping", "admin", "broadcast", "ban", "unban", "premium", "users", "server", "preset",
+     "duration", "request", "myaccess", "approve", "reject", "revoke", "extend", "pending", "approved", "access"]
 ), group=1)
 async def text_input_handler(client: Client, message: Message):
     uid = message.from_user.id
@@ -282,7 +283,7 @@ async def text_input_handler(client: Client, message: Message):
     key = session.awaiting
     value = message.text.strip()
     if len(value) > 120 and key != "custom_caption":
-        await message.reply_text("⚠️ Text bahut lamba hai (max 120 chars).")
+        await message.reply_text("⚠️ Text is too long (max 120 chars).")
         return
     if len(value) > 900:
         await message.reply_text("⚠️ Caption max 900 chars.")
@@ -293,7 +294,27 @@ async def text_input_handler(client: Client, message: Message):
         name = value[:30]
         settings = await db.get_settings(uid)
         await db.save_preset(uid, name, settings)
-        await message.reply_text(f"💾 Preset **{name}** save ho gaya! 🎛 Presets se load karo.")
+        await message.reply_text(f"💾 Preset **{name}** saved! Load it from 🎛 Presets.")
+        return
+
+    if key == "target_duration":
+        from core.helpers import parse_duration_text
+        from core.keyboards import duration_label
+        secs = parse_duration_text(value)
+        if secs is None or secs < 0:
+            session.awaiting = key
+            await message.reply_text("❌ Could not parse that. Examples: `10h`, `2h30m`, `90m`, `1:30:00`, `0`")
+            return
+        secs = min(secs, Config.MAX_OUTPUT_DURATION_SEC)
+        settings = await db.update_setting(uid, key, int(secs))
+        await message.reply_text(f"✅ Final length set to **{duration_label(int(secs))}**",
+                                 reply_markup=settings_keyboard(settings))
+        if session.awaiting_msg_id:
+            try:
+                await client.delete_messages(uid, session.awaiting_msg_id)
+            except Exception:
+                pass
+            session.awaiting_msg_id = None
         return
 
     settings = await db.update_setting(uid, key, value)
