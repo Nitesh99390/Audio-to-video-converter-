@@ -47,6 +47,7 @@ class StateManager:
     def __init__(self):
         self._sessions: Dict[int, Session] = {}
         self._running: Dict[int, asyncio.subprocess.Process] = {}   # user_id -> ffmpeg process
+        self._job_files: Dict[int, List[str]] = {}                   # user_id -> temp files of the running job
         self._cancelled: set = set()
         self.semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_TASKS)
         self.queue_size = 0
@@ -64,6 +65,29 @@ class StateManager:
 
     def exists(self, user_id: int) -> bool:
         return user_id in self._sessions
+
+    def sessions_items(self):
+        """Snapshot of (user_id, Session) pairs — safe to iterate while mutating."""
+        return list(self._sessions.items())
+
+    # ---- files owned by a running job (protected from cleanup) ----
+    def register_job_files(self, user_id: int, *paths: str):
+        lst = self._job_files.setdefault(user_id, [])
+        for p in paths:
+            if p and p not in lst:
+                lst.append(p)
+
+    def release_job_files(self, user_id: int) -> List[str]:
+        return self._job_files.pop(user_id, [])
+
+    def all_job_files(self) -> List[str]:
+        out: List[str] = []
+        for lst in self._job_files.values():
+            out.extend(lst)
+        return out
+
+    def processing_users(self) -> List[int]:
+        return list(self._running.keys())
 
     # ---- ffmpeg process registry (for /cancel) ----
     def register_process(self, user_id: int, proc):

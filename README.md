@@ -28,7 +28,40 @@ Measured in the sandbox (2 vCPU):
 title + watermark 1h      4.4 s    60 MB
 ```
 
-A **Pro engine** (full re-encode, visualizer, Ken-Burns, fade, 4K) is still available in Settings.
+A **Pro engine** (full re-encode, visualizer, Ken-Burns, fade, 4K) exists as well — **admins only**
+(`PRO_ENGINE_ADMIN_ONLY=true`). Every other approved user gets Lite; Pro options are never shown to them
+and any stored Pro setting is silently downgraded before rendering.
+
+---
+
+## 🧭 UI philosophy — show only what is needed
+
+* Bottom keyboard: **2 rows** for users (`🎬 Convert Now · ⏱ Duration` / `⚙️ Settings · 📂 My Files · ❓ Help`),
+  admins get one extra `👑 Admin` row. Everything else is reachable from inline menus.
+* **Settings is tiered:** the main panel has Length · Resolution · Aspect · FPS · Audio.
+  `🔧 Advanced` holds fit / quality / codec / watermark / title / caption / thumbnail / reset.
+  `✨ Effects` (visualizer, Ken-Burns, fade) appears only for admins who switched to Pro.
+* Buttons the user cannot use (Pro engine, Pro quick modes, 4K, 60 fps, transitions) are **not rendered**.
+* Owner approval message shows 6 common durations + `⋯ More` instead of 11 buttons at once.
+* The `/` command menu lists 8 commands for users; admin commands are registered for admins only.
+
+---
+
+## 🗄 Disk guard (Kaggle / Colab safe)
+
+Kaggle gives ~20 GB of scratch space and the kernel dies when it is full, so nothing is ever left behind:
+
+| When | What |
+|---|---|
+| Startup / shutdown | `downloads/` is purged completely (sessions live in RAM, leftovers are garbage) |
+| Before **every** download | `ensure_space(file_size)` – sweeps, then evicts other idle uploads if needed; refuses politely if still no room |
+| Before **every** render | output size is estimated (audio bitrate × length + video + temps) and space is reserved the same way |
+| Right after upload | output, thumbnail, merged / looped audio and all temps are deleted immediately |
+| Every 3 min (watchdog) | orphan & temp files > 10 min, uploads idle > 45 min, quota (`MAX_STORAGE_MB`) enforced oldest-first |
+| Free disk < `MIN_FREE_MB` | emergency eviction of everything not owned by a *running* job |
+
+Files of running jobs are registered in `state` and are never touched. Admin: `/storage` shows the breakdown,
+`/cleanup` (or 👑 Admin → 🧹 Clean now) frees everything idle right away.
 
 ---
 
@@ -52,11 +85,13 @@ Set `ACCESS_REQUIRED=false` to make the bot public.
 * 🖼 Single photo · 2-20 photo **slideshow** · looping **video background**
 * 📐 480p → 4K, all aspect ratios, blur / crop / pad / stretch fit
 * 🎞 FPS 1-30 in Lite mode (1 fps = smallest possible file)
+* 🔐 Pro engine locked to admins; users only ever see Lite options
+* 🗄 Disk guard – auto-clean, quota, emergency eviction, never fills a Kaggle disk
 * 🎵 Audio copy or AAC 64-320k / MP3 (auto-lowered to stay under Telegram's 2 GB cap)
 * 💧 Watermark & 🔤 Title text (work in Lite mode too)
-* ⚡ Quick Modes: Lite 720p · Lite 1080p · Tiniest file · YouTube Pro · Shorts · Music Video · Podcast · 4K
+* ⚡ Quick Modes: Fast 720p · Fast 1080p · Smallest file · Vertical 9:16 (+ Pro profiles for admins)
 * 🎛 Presets, live progress with ETA, cancel button, job queue
-* 👑 Admin: stats, server info, broadcast, ban/unban, cleanup
+* 👑 Admin: stats, server & storage info, broadcast, ban/unban, one-tap cleanup
 
 ---
 
@@ -81,9 +116,10 @@ python bot.py
 
 ## 📋 Commands
 
-**User:** `/start` `/convert` `/duration [10h]` `/request` `/myaccess` `/settings` `/quick` `/presets` `/files` `/clear` `/cancel` `/stats` `/history` `/help` `/about` `/ping`
+**User (in the `/` menu):** `/start` `/convert` `/duration [10h]` `/settings` `/files` `/cancel` `/myaccess` `/help`
+(also work: `/quick` `/presets` `/clear` `/stats` `/history` `/about` `/request` `/ping`)
 
-**Owner / admin:** `/admin` `/pending` `/approved` `/approve <id> [duration]` `/extend <id> <duration>` `/reject <id>` `/revoke <id>` `/access <id>` `/broadcast` `/ban` `/unban` `/premium` `/users` `/server`
+**Owner / admin:** `/admin` `/pending` `/approved` `/approve <id> [duration]` `/extend <id> <duration>` `/reject <id>` `/revoke <id>` `/access <id>` `/broadcast` `/storage` `/cleanup` `/server` `/users` `/ban` `/unban` `/premium`
 
 ---
 
@@ -91,11 +127,13 @@ python bot.py
 ```
 bot.py                 # entry point, command registration, background tasks
 core/
-  config.py            # env config (owner, approval, limits, lite engine)
+  config.py            # env config (owner, approval, limits, policy, storage guard)
+  policy.py            # who may use what (Pro engine = admins only) + settings downgrade
+  storage.py           # 🗄 disk guard: purge / sweep / quota / emergency eviction / ensure_space
   database.py          # aiosqlite layer (users/settings/presets/access/history)
   engine.py            # Pro FFmpeg render + progress runner
   lite_engine.py       # ⚡ loop-copy engine (segment → stream-copy loop)
-  keyboards.py         # reply keyboard + inline menus + approval buttons
+  keyboards.py         # minimal reply keyboard + tiered inline menus (Settings / Advanced / Effects)
   state.py             # per-user sessions, job registry, cancel
   helpers.py           # access gate, force-sub, files panel, duration parser
   strings.py           # UI texts (English)

@@ -3,33 +3,27 @@ from core.config import Config
 
 START = (
     "👋 Hello **{name}**!\n\n"
-    f"🚀 Welcome to **{Config.BOT_NAME}**.\n\n"
-    "I turn **Audio + Photo** into a YouTube-ready **MP4** in a couple of minutes — "
-    "even for **10-hour** videos. The video is kept as light as possible so uploads are quick "
-    "and your listeners can simply play the audio.\n\n"
-    "✨ **What I can do:**\n"
-    "• ⚡ **Lite engine** – 10 h video in ~2 min, tiny file size\n"
-    "• 🔁 **Loop audio** – 1 h track → 2 h / 5 h / 10 h video\n"
-    "• 🖼 Photo, slideshow or looping video background\n"
-    "• 🎬 Optional **Pro engine** – visualizer, Ken-Burns, fade, 4K\n"
-    "• 💧 Watermark & 🔤 Title text\n\n"
-    "📥 **Get started:** send a **Photo** and an **Audio**, then tap 🎬 **Convert Now**.\n"
-    "⌨️ Use the keyboard buttons below."
+    f"Welcome to **{Config.BOT_NAME}** — turn **audio + a photo** into a YouTube-ready MP4, "
+    "even 10-hour videos in about a minute.\n\n"
+    "**How it works**\n"
+    "1️⃣ Send a photo\n"
+    "2️⃣ Send an audio file\n"
+    "3️⃣ Tap **🎬 Convert Now**\n\n"
+    "⏱ Want a 2 h / 5 h / 10 h video from a short track? Set the length with **⏱ Duration** — "
+    "the audio is looped seamlessly."
 )
 
 HELP_MAIN = (
-    "📖 **Help / Guide**\n\n"
-    "**Basic flow:**\n"
+    "📖 **Guide**\n\n"
     "1️⃣ Send a photo (or 2-20 photos for a slideshow)\n"
     "2️⃣ Send an audio / voice / music file\n"
-    "3️⃣ Tap 🎬 **Convert Now**\n\n"
-    "**Tips:**\n"
-    "• Order does not matter – photo first or audio first.\n"
-    "• Audio with embedded album-art? I will use it automatically.\n"
+    "3️⃣ Tap **🎬 Convert Now**\n\n"
+    "• Order does not matter.\n"
+    "• Audio with embedded album art? It is used automatically.\n"
     "• Several audio files are merged one after another.\n"
-    "• ⏱ **Duration** lets you loop the audio to 1 h, 2 h, 5 h, 10 h…\n"
-    "• ⚡ **Lite** engine is the default – fastest & smallest. Switch to 🎬 **Pro** in Settings for effects.\n\n"
-    "Pick a topic below 👇"
+    "• **⏱ Duration** loops the audio to 1 h, 5 h, 10 h…\n"
+    "• Files are deleted from the server right after the video is sent.\n\n"
+    "Pick a topic 👇"
 )
 
 HELP_TOPICS = {
@@ -88,22 +82,15 @@ HELP_TOPICS = {
     ),
     "commands": (
         "📋 **Commands**\n\n"
-        "/start – home\n"
-        "/help – this guide\n"
-        "/settings – settings panel\n"
-        "/quick – quick modes\n"
-        "/presets – saved presets\n"
-        "/files – current uploaded files\n"
-        "/convert – start conversion\n"
-        "/cancel – cancel running job\n"
+        "/convert – start the conversion\n"
+        "/duration `10h` – final video length\n"
+        "/settings – output settings\n"
+        "/files – uploaded files\n"
         "/clear – delete uploaded files\n"
-        "/myaccess – your access status\n"
-        "/request – request access\n"
-        "/stats – your stats\n"
-        "/history – last 5 videos\n"
-        "/about – bot info\n"
-        "/ping – alive check\n\n"
-        "**Admin:** /admin /approve /reject /revoke /extend /pending /approved /broadcast /ban /unban /users /server"
+        "/cancel – cancel the running job\n"
+        "/myaccess – access status\n"
+        "/stats · /history – your numbers\n"
+        "/help – this guide"
     ),
 }
 
@@ -112,10 +99,10 @@ ABOUT = (
     "🧠 Engine: FFmpeg (loop-copy lite engine + libx264 / libx265)\n"
     "⚙️ Framework: Pyrogram (async MTProto)\n"
     "💾 Storage: SQLite\n\n"
-    "🔒 Files are deleted from the server right after upload.\n"
+    "🔒 Files are deleted from the server right after upload; idle uploads auto-expire.\n"
     "⏱ Uptime: `{uptime}`\n"
     "🧵 Active jobs: `{active}` / {max_jobs}\n"
-    "📦 Version: `3.0.0`"
+    "📦 Version: `3.1.0`"
 )
 
 FORCE_SUB = (
@@ -131,6 +118,12 @@ DAILY_LIMIT = (
 )
 
 BUSY = "⚠️ One of your videos is already being processed. Finish or cancel it first."
+
+STORAGE_FULL = (
+    "🗄 **Server storage is full right now.**\n\n"
+    "Other jobs are using the disk. Please try again in a few minutes — "
+    "space is freed automatically as soon as they finish."
+)
 
 NO_FILES = (
     "📂 **No files found!**\n\n"

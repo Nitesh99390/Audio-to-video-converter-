@@ -71,6 +71,18 @@ class Config:
     DAILY_LIMIT_FREE: int = _int("DAILY_LIMIT_FREE", 0)          # 0 = unlimited (approval is the gate)
     FFMPEG_THREADS: int = _int("FFMPEG_THREADS", 0)  # 0 = auto
 
+    # ---- Feature policy ----
+    # Pro engine (full re-encode, visualizer, effects, 4K) is heavy. Only admins may use it;
+    # everybody else gets the Lite engine. Set to false to open Pro for all approved users.
+    PRO_ENGINE_ADMIN_ONLY: bool = _bool("PRO_ENGINE_ADMIN_ONLY", True)
+
+    # ---- Storage guard (Kaggle / Colab have ~20 GB and crash when full) ----
+    MAX_STORAGE_MB: int = _int("MAX_STORAGE_MB", 6000)        # quota for the work folder
+    MIN_FREE_MB: int = _int("MIN_FREE_MB", 1500)              # always keep this much disk free
+    SESSION_TTL_SEC: int = _int("SESSION_TTL_SEC", 45 * 60)   # idle uploads are deleted after this
+    ORPHAN_TTL_SEC: int = _int("ORPHAN_TTL_SEC", 10 * 60)     # files not owned by anyone
+    CLEANUP_INTERVAL_SEC: int = _int("CLEANUP_INTERVAL_SEC", 180)
+
     # ---- Lite (fast) engine ----
     # Length of the pre-rendered video segment that gets loop-copied to the full duration.
     LITE_SEGMENT_SEC: int = _int("LITE_SEGMENT_SEC", 60)

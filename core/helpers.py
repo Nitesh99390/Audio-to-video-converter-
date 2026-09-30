@@ -10,12 +10,13 @@ from pyrogram.types import Message, CallbackQuery
 
 from core.config import Config
 from core.database import db
-from core.keyboards import force_sub_keyboard, files_keyboard, request_access_keyboard, duration_label
+from core.keyboards import force_sub_keyboard, files_keyboard, request_access_keyboard
+from core.policy import apply_policy
 from core.state import state, Session
 from core.strings import (
     FORCE_SUB, BANNED, ACCESS_REQUIRED, ACCESS_PENDING, ACCESS_EXPIRED, ACCESS_REJECTED,
 )
-from core.utils import format_duration, format_time, humanbytes
+from core.utils import format_duration, format_time
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,16 @@ def is_admin(user_id: int) -> bool:
 
 def is_owner(user_id: int) -> bool:
     return user_id == Config.OWNER_ID or (not Config.OWNER_ID and user_id in Config.ADMINS)
+
+
+async def get_settings(user_id: int) -> dict:
+    """Settings with the feature policy applied (Pro engine only for admins etc.).
+    If the stored row violates the policy it is fixed in the DB as well."""
+    s = await db.get_settings(user_id)
+    fixed, changed = apply_policy(user_id, s)
+    if changed:
+        await db.save_settings(user_id, fixed)
+    return fixed
 
 
 def fmt_expiry(expires_at: float) -> str:
@@ -127,59 +138,58 @@ async def gate_cb(client: Client, cq: CallbackQuery, need_access: bool = True) -
 
 # ---------------------------------------------------------------- panels
 def session_summary(session: Session, settings: dict) -> str:
-    lines = ["📂 **Current files**\n"]
+    lines = ["📂 **Your files**\n"]
     if session.bg_video:
-        lines.append("🎥 Background video: ✅")
+        lines.append("🎥 Background video ✓")
     elif session.photos:
         n = len(session.photos)
-        lines.append(f"🖼 Photos: **{n}** " + ("(slideshow)" if n > 1 else ""))
+        lines.append(f"🖼 {n} photo{'s' if n > 1 else ''} ✓" + (" · slideshow" if n > 1 else ""))
     else:
-        lines.append("🖼 Photos: ❌ _(send a photo)_")
+        lines.append("🖼 Photo — _waiting_")
     audio_dur = 0
     if session.audios:
         n = len(session.audios)
         info = session.audio_info
         audio_dur = info.get("duration", 0) if info else 0
         dur = format_duration(audio_dur) if info else "?"
-        extra = f" ({n} files merged)" if n > 1 else ""
-        title = f" – _{info.get('title')}_" if info and info.get("title") else ""
-        lines.append(f"🎵 Audio: ✅ `{dur}`{extra}{title}")
+        extra = f" · {n} files merged" if n > 1 else ""
+        title = f" · _{info.get('title')}_" if info and info.get("title") else ""
+        lines.append(f"🎵 Audio ✓ `{dur}`{extra}{title}")
     else:
-        lines.append("🎵 Audio: ❌ _(send an audio)_")
+        lines.append("🎵 Audio — _waiting_")
     lines.append("")
     target = int(settings.get("target_duration") or 0)
     engine = "⚡ Lite" if settings.get("engine", "lite") == "lite" else "🎬 Pro"
     if target:
-        loop_note = " (audio looped)" if audio_dur and target > audio_dur else ""
-        lines.append(f"⏱ **Final length:** {format_duration(target)}{loop_note}")
+        loop_note = " · audio looped" if audio_dur and target > audio_dur else ""
+        lines.append(f"⏱ Length: **{format_duration(target)}**{loop_note}")
     else:
-        lines.append("⏱ **Final length:** same as audio")
-    lines.append(
-        f"⚙️ **Output:** {engine} • {settings['resolution']} • {settings['aspect']} • {settings['fit']} • "
-        f"{settings['fps']}fps • {settings['quality']}"
-    )
+        lines.append("⏱ Length: **same as audio**")
+    lines.append(f"⚙️ {engine} · {settings['resolution']} · {settings['aspect']} · {settings['fps']} fps · audio {settings['audio_mode']}")
     extras = []
     if settings.get("engine") == "pro":
         if settings["visualizer"] != "none":
-            extras.append(f"🌊 {settings['visualizer']}/{settings['vis_color']}")
+            extras.append(f"🌊 {settings['visualizer']}")
         if settings.get("ken_burns"):
             extras.append("🎥 Ken Burns")
         if settings.get("fade"):
-            extras.append("🌓 Fade")
+            extras.append("🌓 fade")
     if settings.get("watermark_text"):
-        extras.append("💧 Watermark")
+        extras.append("💧 watermark")
     if settings.get("title_text"):
-        extras.append("🔤 Title")
+        extras.append("🔤 title")
     if extras:
-        lines.append("✨ " + " • ".join(extras))
+        lines.append("✨ " + " · ".join(extras))
     if session.ready:
-        lines.append("\n🚀 **Ready!** Tap CONVERT NOW.")
+        lines.append("\n🚀 Ready — tap **Convert now**.")
+    elif not session.has_visual and not session.has_audio:
+        lines.append("\nSend a **photo** and an **audio** file to begin.")
     return "\n".join(lines)
 
 
 async def send_files_panel(message_or_cq, user_id: int, edit: bool = False):
     session = state.get(user_id)
-    settings = await db.get_settings(user_id)
+    settings = await get_settings(user_id)
     text = session_summary(session, settings)
     kb = files_keyboard(session, session.ready)
     if edit and isinstance(message_or_cq, CallbackQuery):
