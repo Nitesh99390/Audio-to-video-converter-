@@ -1,4 +1,4 @@
-# 🎬 Audio → Video Telegram Bot (Lite engine + Approval system)
+# 🎬 Audio → Video Telegram Bot (Lite engine + Approval system + YouTube upload)
 
 Private Telegram bot that turns **Audio + Photo** into a light, YouTube-ready **MP4** —
 a **10-hour video in about 1-2 minutes**. Built for channels where people only *listen*:
@@ -61,6 +61,44 @@ Measured: 10 min lite video + 4 s intro + 3 s outro → joined in **2.6 s**.
 
 ---
 
+## 📺 YouTube upload (admins only)
+
+After every finished video an **admin** is asked **"📤 Upload this video to YouTube?"** right under the video.
+
+```
+video delivered → 📺 Upload to YouTube?  ──No──▶ server copy deleted
+                        │Yes
+                        ▼
+          token stored?  ──No──▶ "send token.pickle" (file) → verified → channel name shown
+                        │Yes
+                        ▼
+          SEO metadata generated from a template  → ✏️ Title · 📝 Description · 🔖 Tags
+          🎨 Template · 🌍 Public / 🔗 Unlisted / 🔒 Private · 👀 Full preview
+                        │ 🚀 Upload now
+                        ▼
+          resumable chunked upload with progress bar → thumbnail set → ▶️ link + Studio link
+```
+
+* **Token:** the admin sends `token.pickle` (the OAuth token created once on a PC — `/yt_token` shows the
+  6-step recipe). It is validated against the API, refreshed when needed and kept in `YT_TOKEN_DIR`
+  (outside `downloads/`, never touched by the disk guard). Also accepted: `token.json` / authorized-user JSON /
+  oauth2client pickles. The message with the secret is deleted from the chat. `/yt_logout` removes it.
+* **SEO templates — so the video is found fast:** `🎵 Music` · `😴 Sleep` · `🎧 Lo-fi` · `🧘 Meditation` ·
+  `📚 Study` · `📝 Plain`. Each fills a search-optimised **title** (`Rain Sounds | 10 Hours Relaxing Sleep Music 😴 …`),
+  a long **description** with keyword block, call-to-action, **hashtags**, auto **timestamps** when several
+  audio files were merged and a copyright note, plus **15 tags** — all clipped to YouTube's 100 / 5000 / 500 limits.
+  Title & artist come from the audio tags or the file name (`Artist - Title.mp3`).
+* **Shortcuts while editing:** `{title}` `{artist}` `{hours}` `{duration}` `{hashtags}` `{chapters}` are
+  replaced in anything you type.
+* The finished file waits **`YT_PENDING_TTL_SEC`** (30 min) for the decision, protected from the sweeper,
+  then is deleted; after a successful upload it is deleted at once. Uploads survive transient 5xx / network
+  errors (exponential back-off, 8 retries) and can be cancelled.
+* Panel: **👑 Admin → 📺 YouTube** or `/youtube` — token status, channel check, default template / privacy,
+  last uploads; `/yt_history` lists everything. Non-admins never see any of this.
+* Quota note: a YouTube Data API project has 10 000 units/day ≈ **6 uploads/day** by default.
+
+---
+
 ## 🧭 UI philosophy — show only what is needed
 
 * Bottom keyboard: **2 rows** for users (`🎬 Convert Now · ⏱ Duration` / `⚙️ Settings · 📂 My Files · ❓ Help`),
@@ -120,6 +158,7 @@ Set `ACCESS_REQUIRED=false` to make the bot public.
 * ⚡ Quick Modes: Fast 720p · Fast 1080p · Smallest file · Vertical 9:16 (+ Pro profiles for admins)
 * 🎛 Presets, live progress with ETA, cancel button, job queue
 * 👑 Admin: stats, server & storage info, broadcast, ban/unban, one-tap cleanup
+* 📺 **YouTube upload** (admins) — send `token.pickle` once, then one tap publishes the video with SEO title / description / tags
 
 ---
 
@@ -131,6 +170,7 @@ cp .env.example .env        # fill API_ID, API_HASH, BOT_TOKEN (OWNER_ID default
 pip install -r requirements.txt
 sudo apt install ffmpeg fonts-dejavu-core
 python bot.py
+python tests/test_youtube.py   # optional: offline self-test
 ```
 
 **Docker:** `cp .env.example .env && docker compose up -d --build`
@@ -148,6 +188,7 @@ python bot.py
 (also work: `/quick` `/presets` `/clear` `/stats` `/history` `/about` `/request` `/ping`)
 
 **Owner / admin:** `/admin` `/pending` `/approved` `/approve <id> [duration]` `/extend <id> <duration>` `/reject <id>` `/revoke <id>` `/access <id>` `/broadcast` `/storage` `/cleanup` `/server` `/users` `/ban` `/unban` `/premium`
+**YouTube (admins):** `/youtube` `/yt_token` `/yt_logout` `/yt_history`
 
 ---
 
@@ -162,6 +203,7 @@ core/
   engine.py            # Pro FFmpeg render + progress runner
   lite_engine.py       # ⚡ loop-copy engine (segment → stream-copy loop)
   intro_outro.py       # 🎬 normalize intro/outro clips once → concat stream-copy (AAC fallback)
+  youtube.py           # 📺 token.pickle handling, SEO templates, resumable YouTube upload
   keyboards.py         # minimal reply keyboard + tiered inline menus (Settings / Advanced / Effects)
   state.py             # per-user sessions, job registry, cancel
   helpers.py           # access gate, force-sub, files panel, duration parser
@@ -174,6 +216,9 @@ plugins/
   convert.py           # pipeline (queue → lite|pro render → upload → log)
   settings.py          # settings menus, duration menu, quick modes, presets
   admin.py             # admin panel & moderation
+  youtube.py           # 📺 "Upload to YouTube?" prompt, token intake, metadata editor, upload progress
+tests/
+  test_youtube.py      # offline tests (templates, token import, mocked upload, pending-file guard)
 ```
 
 ## 📄 License

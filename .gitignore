@@ -9,3 +9,5 @@ downloads/
 *.log
 .venv/
 venv/
+data/
+*.pickle

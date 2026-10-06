@@ -45,6 +45,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "custom_caption": "",
     "thumbnail": "photo",         # auto / photo / none
     "language": "en",
+    # ---- YouTube (admins only) ----
+    "yt_template": "",            # '' = Config.YT_DEFAULT_TEMPLATE
+    "yt_privacy": "",             # '' = Config.YT_DEFAULT_PRIVACY
 }
 
 CREATE_SQL = """
@@ -99,6 +102,18 @@ CREATE TABLE IF NOT EXISTS history (
     size INTEGER,
     render_time REAL,
     settings TEXT
+);
+CREATE TABLE IF NOT EXISTS yt_uploads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    created_at REAL,
+    video_id TEXT,
+    title TEXT,
+    privacy TEXT,
+    size INTEGER,
+    duration REAL,
+    template TEXT,
+    upload_time REAL
 );
 """
 
@@ -394,6 +409,31 @@ class Database:
             "SELECT * FROM history WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, limit)
         )
         return [dict(r) for r in await cur.fetchall()]
+
+    # ------------------------------------------------------- YouTube uploads
+    async def record_yt_upload(self, user_id: int, video_id: str, title: str, privacy: str, size: int,
+                               duration: float, template: str, upload_time: float) -> None:
+        await self._db.execute(
+            "INSERT INTO yt_uploads (user_id, created_at, video_id, title, privacy, size, duration, template, upload_time) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (user_id, time.time(), video_id, title, privacy, size, duration, template, upload_time),
+        )
+        await self._db.execute(
+            "INSERT INTO stats (key, value) VALUES ('yt_uploads', 1) ON CONFLICT(key) DO UPDATE SET value=value+1"
+        )
+        await self._db.commit()
+
+    async def yt_uploads(self, user_id: Optional[int] = None, limit: int = 10) -> List[dict]:
+        if user_id is None:
+            cur = await self._db.execute("SELECT * FROM yt_uploads ORDER BY created_at DESC LIMIT ?", (limit,))
+        else:
+            cur = await self._db.execute(
+                "SELECT * FROM yt_uploads WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, limit))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def yt_upload_count(self) -> int:
+        cur = await self._db.execute("SELECT COUNT(*) FROM yt_uploads")
+        return (await cur.fetchone())[0]
 
 
 db = Database()

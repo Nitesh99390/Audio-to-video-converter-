@@ -96,6 +96,26 @@ class Config:
     # A video shorter than this is treated as an intro/outro candidate, longer ones as background loop.
     INTRO_OUTRO_AUTO_SEC: int = _int("INTRO_OUTRO_AUTO_SEC", 90)
 
+    # ---- YouTube upload (admins only) ----
+    # After a render the admin is asked "Upload to YouTube?". The bot needs an OAuth token
+    # (`token.pickle` from the YouTube Data API quickstart) which the admin simply sends to the bot
+    # as a file. It is stored OUTSIDE the downloads folder so the disk guard never deletes it.
+    YT_UPLOAD_ENABLED: bool = _bool("YT_UPLOAD_ENABLED", True)
+    YT_TOKEN_DIR: str = os.environ.get("YT_TOKEN_DIR", "data/yt_tokens")
+    # How long a finished video waits on disk for the admin's upload decision (then it is deleted).
+    YT_PENDING_TTL_SEC: int = _int("YT_PENDING_TTL_SEC", 30 * 60)
+    # Default privacy for new uploads: public / unlisted / private
+    YT_DEFAULT_PRIVACY: str = os.environ.get("YT_DEFAULT_PRIVACY", "public").strip().lower() or "public"
+    # Default SEO template key (see core/youtube.py TEMPLATES): sleep / lofi / meditation / music / study / plain
+    YT_DEFAULT_TEMPLATE: str = os.environ.get("YT_DEFAULT_TEMPLATE", "music").strip().lower() or "music"
+    # Default category id (10 = Music, 22 = People & Blogs, 24 = Entertainment, 26 = Howto & Style)
+    YT_DEFAULT_CATEGORY: str = os.environ.get("YT_DEFAULT_CATEGORY", "10").strip() or "10"
+    # Resumable upload chunk size in MB (bigger = fewer requests; 8-64 is fine)
+    YT_CHUNK_MB: int = _int("YT_CHUNK_MB", 32)
+    # Extra hashtags / channel name appended to every description (optional)
+    YT_CHANNEL_NAME: str = os.environ.get("YT_CHANNEL_NAME", "")
+    YT_EXTRA_TAGS: str = os.environ.get("YT_EXTRA_TAGS", "")
+
     # ---- Paths ----
     DOWNLOAD_DIR: str = os.environ.get("DOWNLOAD_DIR", "downloads")
     DB_PATH: str = os.environ.get("DB_PATH", "bot_data.db")
@@ -113,3 +133,10 @@ class Config:
             logger.error("Set them as Kaggle Secrets / env vars / .env file and restart.")
             sys.exit(1)
         os.makedirs(cls.DOWNLOAD_DIR, exist_ok=True)
+        if cls.YT_UPLOAD_ENABLED:
+            try:
+                os.makedirs(cls.YT_TOKEN_DIR, exist_ok=True)
+            except OSError as e:
+                logger.warning("Cannot create YT_TOKEN_DIR %s: %s", cls.YT_TOKEN_DIR, e)
+        if cls.YT_DEFAULT_PRIVACY not in ("public", "unlisted", "private"):
+            cls.YT_DEFAULT_PRIVACY = "public"

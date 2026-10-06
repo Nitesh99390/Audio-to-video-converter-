@@ -20,7 +20,7 @@ from core.helpers import gate, gate_cb, is_admin, send_files_panel, get_settings
 from core.keyboards import cancel_keyboard, after_video_keyboard
 from core.lite_engine import LITE_AUDIO_BITRATE
 from core.policy import apply_policy
-from core.state import state
+from core.state import state, PendingOutput
 from core import storage
 from core.strings import NO_FILES, BUSY, DAILY_LIMIT, STORAGE_FULL
 from core.utils import (
@@ -217,10 +217,16 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
     try:
         # ---- audio (merge if multiple)
         audio = session.audios[0]
+        audio_durs = []                                  # per-file lengths (YouTube chapters)
         if len(session.audios) > 1:
             await status.edit_text(f"🎵 Merging {len(session.audios)} audio files...", reply_markup=cancel_keyboard())
             merged = os.path.join(out_dir, f"merged_{uid}_{task_id}.m4a")
             state.register_job_files(uid, merged)
+            for a in session.audios:
+                try:
+                    audio_durs.append(float((await ffprobe(a)).get("duration") or 0))
+                except Exception:
+                    audio_durs.append(0.0)
             audio = await merge_audios(session.audios, merged)
         info = await ffprobe(audio)
         audio_dur = info["duration"]
@@ -382,6 +388,26 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
             pass
 
         await db.record_video(uid, mode, target, size, render_time, settings)
+
+        # ---- admins: keep the file a little longer and ask "Upload to YouTube?"
+        if Config.YT_UPLOAD_ENABLED and is_admin(uid):
+            kept = os.path.join(out_dir, f"ytpending_{uid}_{task_id}.mp4")
+            kept_thumb = None
+            try:
+                os.replace(output, kept)
+                if thumb and os.path.exists(thumb):
+                    kept_thumb = os.path.join(out_dir, f"ytthumb_{uid}_{task_id}.jpg")
+                    os.replace(thumb, kept_thumb)
+                pending = PendingOutput(
+                    user_id=uid, path=kept, thumb=kept_thumb, size=size, duration=float(out_info["duration"]),
+                    audio_info=dict(info), audio_files=list(session.audios), audio_durations=list(audio_durs),
+                )
+                from plugins.youtube import ask_upload
+                await ask_upload(client, uid, pending, reply_to=sent)
+            except Exception as e:
+                logger.warning("youtube prompt failed: %s", e)
+                cleanup(kept, kept_thumb)
+
         # output is on Telegram now — free the disk immediately, do not wait for `finally`
         cleanup(output, thumb, merged, *temps)
 

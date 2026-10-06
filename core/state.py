@@ -52,11 +52,42 @@ class Session:
         return files
 
 
+@dataclass
+class PendingOutput:
+    """
+    A finished video that is kept on disk a little longer because the admin may want to
+    upload it to YouTube. Deleted when the admin declines, after the upload, or when
+    `YT_PENDING_TTL_SEC` passes (storage.sweep). Files are protected from the disk guard
+    while this object exists.
+    """
+    user_id: int
+    path: str
+    thumb: Optional[str]
+    size: int
+    duration: float
+    audio_info: dict = field(default_factory=dict)
+    audio_files: List[str] = field(default_factory=list)
+    audio_durations: List[float] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)        # editable YouTube metadata
+    prompt_msg_id: Optional[int] = None             # the "Upload to YouTube?" message
+    uploading: bool = False
+    cancel_upload: bool = False
+    created_at: float = field(default_factory=time.time)
+
+    def files(self) -> List[str]:
+        return [p for p in (self.path, self.thumb) if p]
+
+    @property
+    def expired(self) -> bool:
+        return (time.time() - self.created_at) > Config.YT_PENDING_TTL_SEC and not self.uploading
+
+
 class StateManager:
     def __init__(self):
         self._sessions: Dict[int, Session] = {}
         self._running: Dict[int, asyncio.subprocess.Process] = {}   # user_id -> ffmpeg process
         self._job_files: Dict[int, List[str]] = {}                   # user_id -> temp files of the running job
+        self._pending: Dict[int, PendingOutput] = {}                 # user_id -> finished video awaiting YT decision
         self._cancelled: set = set()
         self.semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_TASKS)
         self.queue_size = 0
@@ -97,6 +128,28 @@ class StateManager:
 
     def processing_users(self) -> List[int]:
         return list(self._running.keys())
+
+    # ---- finished outputs waiting for the YouTube decision (admins) ----
+    def set_pending(self, user_id: int, pending: PendingOutput) -> Optional[PendingOutput]:
+        """Replace the user's pending output; returns the previous one (caller deletes its files)."""
+        old = self._pending.pop(user_id, None)
+        self._pending[user_id] = pending
+        return old
+
+    def get_pending(self, user_id: int) -> Optional[PendingOutput]:
+        return self._pending.get(user_id)
+
+    def pop_pending(self, user_id: int) -> Optional[PendingOutput]:
+        return self._pending.pop(user_id, None)
+
+    def pending_items(self):
+        return list(self._pending.items())
+
+    def pending_files(self) -> List[str]:
+        out: List[str] = []
+        for p in self._pending.values():
+            out.extend(p.files())
+        return out
 
     # ---- ffmpeg process registry (for /cancel) ----
     def register_process(self, user_id: int, proc):
