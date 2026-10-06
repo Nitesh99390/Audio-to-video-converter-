@@ -38,7 +38,7 @@ async def stats_text() -> str:
         "📊 **Global stats**\n\n"
         f"👥 Users: **{g.get('total_users', 0)}** (active 24h: {g.get('active_24h', 0)})\n"
         f"🔑 Approved: {c['approved']} • ⏳ Pending: {c['pending']} • 🚫 Banned: {g.get('banned_users', 0)}\n"
-        f"🎬 Videos: **{g.get('total_videos', 0)}**\n"
+        f"🎬 Videos: **{g.get('total_videos', 0)}** · 📺 YouTube uploads: **{g.get('yt_uploads', 0)}**\n"
         f"📦 Output: {humanbytes(g.get('total_bytes', 0))}\n"
         f"⏱ Render time: {format_time(g.get('total_render_time', 0))}\n"
         f"🧵 Active jobs: {state.active_tasks}/{Config.MAX_CONCURRENT_TASKS}\n"
@@ -131,7 +131,11 @@ async def admin_cb(client: Client, cq: CallbackQuery):
                 "**Moderation:**\n"
                 "`/ban <id> [reason]` • `/unban <id>`\n"
                 "`/premium <id>` (toggle)\n`/users` — stats • `/server` — server info\n"
-                "`/broadcast` (reply to a message)")
+                "`/broadcast` (reply to a message)\n\n"
+                "**YouTube (admins):**\n"
+                "`/youtube` — panel · `/yt_token` — how to get token.pickle\n"
+                "`/yt_logout` — delete token · `/yt_history` — all uploads\n"
+                "After every render you are asked *Upload to YouTube?*")
     elif action == "cleanup":
         r = storage.sweep(orphan_ttl=0, session_ttl=0)
         text = (f"🧹 **Cleanup done**\n\n{r['files']} orphan files · {r['sessions']} idle uploads · "

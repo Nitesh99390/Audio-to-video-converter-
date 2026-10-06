@@ -60,6 +60,9 @@ ADMIN_COMMANDS = USER_COMMANDS + [
     BotCommand("server", "Server info"),
     BotCommand("ban", "/ban <id> [reason]"),
     BotCommand("unban", "/unban <id>"),
+    BotCommand("youtube", "YouTube upload panel (token, defaults, history)"),
+    BotCommand("yt_token", "How to create token.pickle"),
+    BotCommand("yt_logout", "Delete the stored YouTube token"),
 ]
 
 
@@ -115,6 +118,7 @@ async def main():
                 f"🟢 **{Config.BOT_NAME}** is online as @{me.username}\n"
                 f"🔐 Approval: {'ON' if Config.ACCESS_REQUIRED else 'OFF'} · ⏳ {c['pending']} pending · ✅ {c['approved']} approved\n"
                 f"🎬 Pro engine: {'admins only' if Config.PRO_ENGINE_ADMIN_ONLY else 'everyone'}\n"
+                f"📺 YouTube upload: {'ON (admins) — send token.pickle any time' if Config.YT_UPLOAD_ENABLED else 'OFF'}\n"
                 f"🗄 Disk free: {storage.disk_free() // (1024 * 1024)} MB · auto-clean every "
                 f"{Config.CLEANUP_INTERVAL_SEC // 60} min",
             )

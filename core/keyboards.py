@@ -118,6 +118,7 @@ def help_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     ]
     if is_admin:
         rows.append([_btn("⚡ Lite vs 🎬 Pro", "help:lite"), _btn("🌊 Visualizer", "help:visualizer")])
+        rows.append([_btn("📺 YouTube upload", "help:youtube")])
     rows.append([_btn("🔑 My Access", "nav:access"), _btn("📊 My Stats", "nav:stats"), _btn("ℹ️ About", "nav:about")])
     rows.append([_home()])
     return InlineKeyboardMarkup(rows)
@@ -485,5 +486,91 @@ def admin_keyboard(pending: int = 0, approved: int = 0) -> InlineKeyboardMarkup:
         [_btn(f"⏳ Pending ({pending})", "admin:pending"), _btn(f"✅ Approved ({approved})", "admin:approved")],
         [_btn("📊 Stats", "admin:stats"), _btn("🖥 Server", "admin:server"), _btn("🗄 Storage", "admin:storage")],
         [_btn("📢 Broadcast", "admin:broadcast_help"), _btn("📋 Commands", "admin:ban_help")],
-        [_btn("🧹 Clean now", "admin:cleanup"), _home()],
+        [_btn("📺 YouTube", "yt:panel"), _btn("🧹 Clean now", "admin:cleanup"), _home()],
     ])
+
+
+# ---------------------------------------------------------------- YouTube (admins)
+def yt_prompt_keyboard(has_token: bool) -> InlineKeyboardMarkup:
+    """Asked right after the video was delivered: upload it to YouTube?"""
+    first = _btn("📺 Yes, upload to YouTube", "yt:ask") if has_token else _btn("📺 Yes — I will send token.pickle", "yt:ask")
+    return InlineKeyboardMarkup([
+        [first],
+        [_btn("✖ No, Telegram only", "yt:skip")],
+    ])
+
+
+def yt_token_wait_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [_btn("❓ How to create token.pickle", "yt:howto")],
+        [_btn("✖ Cancel upload", "yt:skip")],
+    ])
+
+
+def yt_meta_keyboard(meta: Dict[str, Any], has_thumb: bool = True) -> InlineKeyboardMarkup:
+    """Review / edit metadata before the upload."""
+    priv = meta.get("privacy", "public")
+    rows = [
+        [_btn("🚀 Upload now", "yt:upload")],
+        [_btn("✏️ Title", "yt:edit:title"), _btn("📝 Description", "yt:edit:description"), _btn("🔖 Tags", "yt:edit:tags")],
+        [_btn("🎨 SEO template", "yt:templates"), _btn("👀 Full preview", "yt:preview")],
+        [_btn(_mark("🌍 Public", priv == "public"), "yt:privacy:public"),
+         _btn(_mark("🔗 Unlisted", priv == "unlisted"), "yt:privacy:unlisted"),
+         _btn(_mark("🔒 Private", priv == "private"), "yt:privacy:private")],
+        [_btn("🔁 Regenerate", "yt:regen"), _btn("✖ Cancel", "yt:skip")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def yt_templates_keyboard(current: str) -> InlineKeyboardMarkup:
+    from core.youtube import TEMPLATES, TEMPLATE_ORDER
+    btns = [_btn(_mark(TEMPLATES[k].label, k == current), f"yt:template:{k}") for k in TEMPLATE_ORDER if k in TEMPLATES]
+    rows = _grid(btns, 2)
+    rows.append([_btn("‹ Back", "yt:meta")])
+    return InlineKeyboardMarkup(rows)
+
+
+def yt_edit_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[_btn("‹ Back without changes", "yt:meta")]])
+
+
+def yt_upload_progress_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[_btn("✖ Cancel upload", "yt:cancel_upload")]])
+
+
+def yt_done_keyboard(url: str, studio: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("▶️ Watch on YouTube", url=url)],
+        [InlineKeyboardButton("🎬 Open in YouTube Studio", url=studio)],
+    ])
+
+
+def yt_panel_keyboard(has_token: bool, has_pending: bool, default_tpl: str, default_privacy: str) -> InlineKeyboardMarkup:
+    from core.youtube import TEMPLATES
+    rows = []
+    if has_pending:
+        rows.append([_btn("📤 Upload the last video", "yt:ask")])
+    if has_token:
+        rows.append([_btn("📡 Check channel", "yt:check"), _btn("🗑 Remove token", "yt:logout")])
+    else:
+        rows.append([_btn("❓ How to create token.pickle", "yt:howto")])
+    tpl_label = TEMPLATES.get(default_tpl, TEMPLATES["music"]).label
+    rows.append([_btn(f"🎨 Default: {tpl_label}", "yt:deftpl"), _btn(f"🔒 Default: {default_privacy}", "yt:defpriv")])
+    rows.append([_btn("‹ Admin", "nav:admin"), _home()])
+    return InlineKeyboardMarkup(rows)
+
+
+def yt_default_templates_keyboard(current: str) -> InlineKeyboardMarkup:
+    from core.youtube import TEMPLATES, TEMPLATE_ORDER
+    btns = [_btn(_mark(TEMPLATES[k].label, k == current), f"yt:deftpl:{k}") for k in TEMPLATE_ORDER if k in TEMPLATES]
+    rows = _grid(btns, 2)
+    rows.append([_btn("‹ Back", "yt:panel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def yt_default_privacy_keyboard(current: str) -> InlineKeyboardMarkup:
+    rows = [[_btn(_mark("🌍 Public", current == "public"), "yt:defpriv:public"),
+             _btn(_mark("🔗 Unlisted", current == "unlisted"), "yt:defpriv:unlisted"),
+             _btn(_mark("🔒 Private", current == "private"), "yt:defpriv:private")],
+            [_btn("‹ Back", "yt:panel")]]
+    return InlineKeyboardMarkup(rows)

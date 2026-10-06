@@ -66,7 +66,8 @@ def _owner_from_name(path: str) -> Optional[int]:
 
 
 def _job_files() -> Set[str]:
-    return set(state.all_job_files())
+    """Files of running jobs + finished videos waiting for the admin's YouTube decision."""
+    return set(state.all_job_files()) | set(state.pending_files())
 
 
 def _session_files() -> Dict[str, int]:
@@ -180,8 +181,10 @@ def sweep(orphan_ttl: Optional[float] = None, session_ttl: Optional[float] = Non
     orphan_ttl = Config.ORPHAN_TTL_SEC if orphan_ttl is None else orphan_ttl
     session_ttl = Config.SESSION_TTL_SEC if session_ttl is None else session_ttl
     now = time.time()
-    entries = scan()
+    # 0. finished videos the admin never decided about (YouTube prompt) — drop after their TTL
     freed = files = 0
+    freed += expire_pending(force=(session_ttl == 0))
+    entries = scan()
 
     # 1. orphans: not in a session, not in a job, old enough (temps get no TTL)
     victims = [e for e in entries
@@ -203,6 +206,24 @@ def sweep(orphan_ttl: Optional[float] = None, session_ttl: Optional[float] = Non
                     files, len(idle), humanbytes(q["freed"]), humanbytes(freed),
                     humanbytes(folder_size()), humanbytes(disk_free()))
     return {"files": files, "sessions": len(idle), "freed": freed}
+
+
+def expire_pending(force: bool = False) -> int:
+    """Delete finished outputs whose YouTube decision timed out. Returns bytes freed."""
+    freed = 0
+    for uid, p in state.pending_items():
+        if p.uploading:
+            continue
+        if force or p.expired:
+            state.pop_pending(uid)
+            for f in p.files():
+                try:
+                    freed += os.path.getsize(f)
+                except OSError:
+                    pass
+                cleanup(f)
+            logger.info("Storage: pending YouTube output of %s expired (%s)", uid, humanbytes(freed))
+    return freed
 
 
 def enforce_quota() -> Dict[str, int]:

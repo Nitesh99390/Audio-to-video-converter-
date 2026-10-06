@@ -100,6 +100,17 @@ HELP_TOPICS = {
         "• **Title** – big text (song name etc.) top / center / bottom.\n\n"
         "Settings → Watermark / Title → ✏️ Set text."
     ),
+    "youtube": (
+        "📺 **YouTube upload (admins only)**\n\n"
+        "After every finished video the bot asks **Upload to YouTube?**\n"
+        "• First time: send your **token.pickle** as a file — it is stored and reused.\n"
+        "• Title, description and tags are generated from an **SEO template** "
+        "(Music / Sleep / Lo-fi / Meditation / Study / Plain) with keywords, hashtags, timestamps and a "
+        "copyright note so the video is found quickly in search.\n"
+        "• Edit any field with one tap, pick Public / Unlisted / Private, then **🚀 Upload now**.\n"
+        "• The thumbnail is set automatically and you get the video + Studio link.\n\n"
+        "Commands: /youtube — panel · /yt_token — how to create the token · /yt_logout — delete token"
+    ),
     "commands": (
         "📋 **Commands**\n\n"
         "/convert – start the conversion\n"
@@ -122,7 +133,7 @@ ABOUT = (
     "🔒 Files are deleted from the server right after upload; idle uploads auto-expire.\n"
     "⏱ Uptime: `{uptime}`\n"
     "🧵 Active jobs: `{active}` / {max_jobs}\n"
-    "📦 Version: `3.1.0`"
+    "📦 Version: `3.2.0`"
 )
 
 FORCE_SUB = (
@@ -212,4 +223,61 @@ ADMIN_NEW_REQUEST = (
     "🕐 {when}\n"
     "{note}\n"
     "How long should this user get access?"
+)
+
+
+# ---------------------------------------------------------------- YouTube (admins)
+YT_PROMPT = (
+    "📺 **Upload this video to YouTube?**\n\n"
+    "📦 {size} · ⏱ {duration}\n"
+    "{token_line}\n\n"
+    "_The file is kept for {ttl} min, then deleted automatically._"
+)
+YT_TOKEN_OK_LINE = "🔑 Token: ✅ saved — one tap and it goes live on **{channel}**."
+YT_TOKEN_MISSING_LINE = "🔑 Token: ❌ not set — I will ask for **token.pickle** after you tap Yes."
+YT_NEED_TOKEN = (
+    "🔑 **Send me your `token.pickle` now** (as a file 📎).\n\n"
+    "It is the OAuth token of the Google account that owns the channel. "
+    "I store it for you only and reuse it for every upload — you will not be asked again.\n\n"
+    "Tap ❓ if you do not have one yet."
+)
+YT_TOKEN_SAVED = (
+    "✅ **Token saved & verified**\n\n"
+    "📺 Channel: **{title}**{url}\n"
+    "👥 {subs} subscribers · 🎞 {videos} videos\n\n"
+    "{next}"
+)
+YT_TOKEN_SAVED_NOVERIFY = "✅ **Token saved** (channel lookup skipped: {reason})\n\n{next}"
+YT_NOTHING_PENDING = (
+    "ℹ️ There is no finished video waiting for upload.\n"
+    "Convert a video first — after it is sent you will be asked about YouTube."
+)
+YT_EXPIRED = "⌛ That video was already deleted from the server (decision window passed). Convert it again."
+YT_SKIPPED = "👍 Okay — Telegram only. The server copy was deleted."
+YT_EDIT_PROMPT = {
+    "title": "✏️ **Send the new title** (max 100 chars).\nShortcuts: `{title}` `{artist}` `{hours}` `{duration}` are replaced automatically.",
+    "description": "📝 **Send the new description** (max 5000 chars).\nShortcuts: `{title}` `{artist}` `{hours}` `{duration}` `{hashtags}` `{chapters}`.",
+    "tags": "🔖 **Send the tags**, comma separated (max ~500 chars total).\nExample: `sleep music, rain sounds, 10 hours`",
+}
+YT_UPLOADING = (
+    "📤 **Uploading to YouTube…**\n\n"
+    "`[{bar}]` **{pct:.1f}%**\n\n"
+    "📦 {sent} / {total}\n"
+    "⚡ {speed}/s · 🕐 ETA {eta}\n\n"
+    "🏷 {title}"
+)
+YT_DONE = (
+    "✅ **Uploaded to YouTube!**\n\n"
+    "🏷 {title}\n"
+    "🔒 {privacy} · 🖼 thumbnail {thumb} · ⏱ took {took}\n\n"
+    "🔗 {url}\n\n"
+    "_The server copy was deleted._"
+)
+YT_FAILED = (
+    "❌ **YouTube upload failed**\n\n{error}\n\n"
+    "The video is still on the server for a while — fix the problem and tap 📤 again from 👑 Admin → 📺 YouTube."
+)
+YT_TOKEN_BAD = (
+    "🔑 **Token problem**\n\n{error}\n\n"
+    "Send a new **token.pickle** to continue."
 )

@@ -402,7 +402,7 @@ async def document_handler(client: Client, message: Message):
     ["start", "help", "settings", "quick", "presets", "files", "convert", "cancel", "clear", "stats",
      "history", "about", "ping", "admin", "broadcast", "ban", "unban", "premium", "users", "server", "preset",
      "duration", "request", "myaccess", "approve", "reject", "revoke", "extend", "pending", "approved", "access",
-     "storage", "cleanup"]
+     "storage", "cleanup", "youtube", "yt", "yt_token", "yt_logout", "yt_history"]
 ), group=1)
 async def text_input_handler(client: Client, message: Message):
     uid = message.from_user.id
