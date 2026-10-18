@@ -194,11 +194,33 @@ def pending_list_keyboard(rows_data: List[dict]) -> InlineKeyboardMarkup:
 
 
 # ------------------------------------------------------------ files / job
+def spatial_row(current: Optional[str]) -> List[InlineKeyboardButton]:
+    """Normal / 8D / 3D selector for the audio in the session."""
+    opts = [(None, "🎵 Normal"), ("8d", "🎧 8D"), ("3d", "🌀 3D")]
+    return [_btn(_mark(lbl, k == current), f"spatial:{k or 'off'}") for k, lbl in opts]
+
+
+def spatial_keyboard(current: Optional[str], has_visual: bool) -> InlineKeyboardMarkup:
+    """
+    Shown right after an audio file arrives. The user picks the effect and how to receive it:
+    🎵 Audio only (fast, no photo needed) or 🎬 Video (photo + audio pipeline).
+    """
+    rows = [spatial_row(current)]
+    if current:
+        rows.append([_btn(f"🎵 Send {current.upper()} audio", f"spatial:audio:{current}"),
+                     _btn(f"🎬 Make {current.upper()} video", "spatial:video")])
+    return InlineKeyboardMarkup(rows)
+
+
 def files_keyboard(session, ready: bool) -> InlineKeyboardMarkup:
     rows = []
     if ready:
         rows.append([_btn("🚀 Convert now", "job:start")])
         rows.append([_btn("⏱ Duration", "menu:target_duration"), _btn("⚙️ Settings", "nav:settings")])
+    if session.audios:
+        rows.append(spatial_row(session.spatial))
+        if session.spatial:
+            rows.append([_btn(f"🎵 Send {session.spatial.upper()} audio only", f"spatial:audio:{session.spatial}")])
     row = []
     if session.photos:
         row.append(_btn(f"🗑 Photos ({len(session.photos)})", "files:clear_photos"))

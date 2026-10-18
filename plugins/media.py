@@ -15,7 +15,7 @@ from pyrogram.types import Message, CallbackQuery
 from core.config import Config
 from core.database import db
 from core.helpers import gate, send_files_panel, get_settings
-from core.keyboards import settings_keyboard, advanced_keyboard, video_role_keyboard
+from core.keyboards import settings_keyboard, advanced_keyboard, video_role_keyboard, spatial_keyboard
 from core.state import state
 from core import storage
 from core.strings import NEED_MORE, STORAGE_FULL
@@ -185,6 +185,10 @@ async def _ingest_audio(client: Client, message: Message, media):
             await status.delete()
         except Exception:
             pass
+    # 3D / 8D choice (audio-only or video) — shown once per session, for the first audio
+    if len(session.audios) == 1:
+        from plugins.spatial import prompt_text
+        await message.reply_text(prompt_text(session), reply_markup=spatial_keyboard(session.spatial, session.has_visual))
     await _after_upload(message, uid, kind="audio")
 
 

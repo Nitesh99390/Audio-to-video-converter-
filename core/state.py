@@ -20,6 +20,7 @@ class Session:
     intro_info: dict = field(default_factory=dict)
     outro_info: dict = field(default_factory=dict)
     audio_info: dict = field(default_factory=dict)
+    spatial: Optional[str] = None                         # None | "8d" | "3d" — applied to the audio before rendering
     awaiting: Optional[str] = None                        # text input mode e.g. "watermark_text"
     awaiting_msg_id: Optional[int] = None
     created_at: float = field(default_factory=time.time)

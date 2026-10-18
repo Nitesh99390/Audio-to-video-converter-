@@ -20,6 +20,7 @@ from core.helpers import gate, gate_cb, is_admin, send_files_panel, get_settings
 from core.keyboards import cancel_keyboard, after_video_keyboard
 from core.lite_engine import LITE_AUDIO_BITRATE
 from core.policy import apply_policy
+from core import spatial
 from core.state import state, PendingOutput
 from core import storage
 from core.strings import NO_FILES, BUSY, DAILY_LIMIT, STORAGE_FULL
@@ -117,6 +118,7 @@ async def files_cb(client: Client, cq: CallbackQuery):
         cleanup(*session.audios)
         session.audios.clear()
         session.audio_info = {}
+        session.spatial = None
     elif action == "clear_video":
         cleanup(session.bg_video)
         session.bg_video = None
@@ -233,6 +235,20 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
         if audio_dur <= 0:
             raise RenderError("Could not detect the audio duration.")
 
+        # ---- 3D / 8D: process the audio once (AAC), the lite engine then stream-copies it
+        if session.spatial in spatial.FILTERS:
+            sp_out = os.path.join(out_dir, f"spatial_{uid}_{task_id}.m4a")
+            temps.append(sp_out)
+            state.register_job_files(uid, sp_out)
+            await status.edit_text(f"🎧 Applying **{session.spatial.upper()}** effect to the audio...",
+                                   reply_markup=cancel_keyboard())
+            await render(spatial.build_command(audio, sp_out, session.spatial, kbps=192), audio_dur,
+                         on_process=lambda p: state.register_process(uid, p), timeout=2 * 3600)
+            if state.was_cancelled(uid):
+                raise RenderError("cancelled")
+            audio = sp_out
+            info = {**(await ffprobe(sp_out)), "title": info.get("title"), "artist": info.get("artist")}
+
         # ---- target duration
         target = int(settings.get("target_duration") or 0) or audio_dur
         target = float(min(target, Config.MAX_OUTPUT_DURATION_SEC))
@@ -251,9 +267,12 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
             src_w, src_h = bg_info["width"], bg_info["height"]
 
         mode = "bgvideo" if bg_video else ("slideshow" if len(images) > 1 else "image")
+        if session.spatial:
+            mode += f"+{session.spatial}"
         header_base = (
             f"{'⚡' if engine == 'lite' else '🎬'} **{engine.upper()} render** • {mode}\n"
-            f"🎵 audio {format_duration(audio_dur)} → 🎞 video **{format_duration(target)}**"
+            + (f"🎧 **{session.spatial.upper()} audio**\n" if session.spatial else "")
+            + f"🎵 audio {format_duration(audio_dur)} → 🎞 video **{format_duration(target)}**"
             + (" (audio looped)" if looped else "")
         )
         stage_text = {"text": "⏳ Preparing..."}
@@ -367,6 +386,9 @@ async def _run_job(client: Client, uid: int, session, settings: dict, status: Me
         throttle = Throttle(4)
         t_up = time.time()
         base_name = safe_filename(info.get("title") or os.path.splitext(os.path.basename(session.audios[0]))[0], "video")
+        if session.spatial:
+            base_name += f"_{session.spatial.upper()}"
+            extra_caption += f" • 🎧 {session.spatial.upper()}"
         file_name = f"{base_name}_{format_duration(target).replace(':', '-')}_{out_h}p.mp4"
 
         common = dict(
