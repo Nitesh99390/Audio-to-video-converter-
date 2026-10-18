@@ -112,6 +112,19 @@ video delivered → 📺 Upload to YouTube?  ──No──▶ server copy delet
 
 ---
 
+## 🎧 3D / 8D audio
+
+Right after an audio file arrives the bot asks **Normal · 🎧 8D · 🌀 3D**. Pick one, then choose:
+
+| Button | Result | Time |
+|---|---|---|
+| 🎵 **Send 8D/3D audio** | Processed **MP3 192k** sent straight back — no photo needed | ~1x realtime on Kaggle CPU |
+| 🎬 **Make 8D/3D video** | Normal photo + audio video; the effect is applied **once** to the audio, the lite engine then stream-copies it | same as a normal video + audio pass |
+
+* **8D** – `apulsator` rotation (one circle every 8 s) + room echo + stereo widening.
+* **3D** – `extrastereo` + `haas` + `stereowiden` + soft echo (wide surround, no rotation).
+* Pure FFmpeg filters, nothing to install. The selector is also in **📂 My Files**; clearing the audio resets it.
+
 ## 🗄 Disk guard (Kaggle / Colab safe)
 
 Kaggle gives ~20 GB of scratch space and the kernel dies when it is full, so nothing is ever left behind:

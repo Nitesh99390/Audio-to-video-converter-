@@ -158,6 +158,8 @@ def session_summary(session: Session, settings: dict) -> str:
         extra = f" · {n} files merged" if n > 1 else ""
         title = f" · _{info.get('title')}_" if info and info.get("title") else ""
         lines.append(f"🎵 Audio ✓ `{dur}`{extra}{title}")
+        if session.spatial:
+            lines.append(f"🎧 Effect: **{session.spatial.upper()}** surround (applied before rendering)")
     else:
         lines.append("🎵 Audio — _waiting_")
     if session.outro:
